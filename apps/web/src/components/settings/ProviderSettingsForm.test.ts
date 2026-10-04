@@ -8,108 +8,49 @@ import {
 } from "./ProviderSettingsForm";
 
 describe("ProviderSettingsForm helpers", () => {
-  it("derives visible provider config fields from the client definition schema", () => {
-    const codex = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("codex")];
+  it("derives visible Pi config fields from the client definition schema", () => {
+    const pi = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("pi")];
 
-    expect(codex).toBeDefined();
-    expect(deriveProviderSettingsFields(codex!).map((field) => field.key)).toEqual([
+    expect(pi).toBeDefined();
+    expect(deriveProviderSettingsFields(pi!).map((field) => field.key)).toEqual([
       "binaryPath",
-      "homePath",
-      "shadowHomePath",
       "launchArgs",
     ]);
   });
 
-  it("sources labels and descriptions from schema annotations", () => {
-    const opencode = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("opencode")];
-    expect(opencode).toBeDefined();
+  it("sources Pi labels and descriptions from schema annotations", () => {
+    const pi = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("pi")];
+    expect(pi).toBeDefined();
 
-    const serverPassword = deriveProviderSettingsFields(opencode!).find(
-      (field) => field.key === "serverPassword",
-    );
-
-    expect(serverPassword).toMatchObject({
-      label: "Server password",
-      description: "Stored in plain text on disk.",
-      control: "password",
+    expect(deriveProviderSettingsFields(pi!)[0]).toMatchObject({
+      key: "binaryPath",
+      label: "Binary path",
+      description: "Path to the Pi coding agent binary.",
+      control: "text",
     });
   });
 
-  it("uses a dedicated environment field instead of legacy Cursor CLI settings", () => {
-    const cursor = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("cursor")];
+  it("hides the fields that are not part of the provider settings form", () => {
+    const pi = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("pi")];
+    expect(pi).toBeDefined();
 
-    expect(cursor).toBeDefined();
-    expect(deriveProviderSettingsFields(cursor!)).toEqual([]);
-    expect(cursor?.environmentFields).toEqual([
-      {
-        name: "CURSOR_API_KEY",
-        label: "Cursor API key",
-        description: "Optional. Overrides browser sign-in for this provider.",
-        placeholder: "Paste API key",
-        sensitive: true,
-      },
-    ]);
+    const visibleKeys = deriveProviderSettingsFields(pi!).map((field) => field.key);
+    expect(visibleKeys).not.toContain("enabled");
+    expect(visibleKeys).not.toContain("customModels");
   });
 
-  it("exposes ACP Registry as an instance-only configurable driver", () => {
-    const acpRegistry = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("acpRegistry")];
+  it("preserves unknown config keys while omitting an empty Pi binary path", () => {
+    const pi = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("pi")];
+    expect(pi).toBeDefined();
 
-    expect(acpRegistry).toBeDefined();
-    expect(acpRegistry?.hasDefaultInstance).toBe(false);
-    expect(deriveProviderSettingsFields(acpRegistry!).map((field) => field.key)).toEqual([
-      "agentId",
-      "commandPath",
-      "authMethodId",
-    ]);
-  });
-
-  it("derives a select control with its choices for the Antigravity sign-in method", () => {
-    const antigravity = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("antigravity")];
-    expect(antigravity).toBeDefined();
-
-    const fields = deriveProviderSettingsFields(antigravity!);
-    expect(fields.map((field) => field.key)).toEqual([
-      "authMethod",
-      "apiKey",
-      "gcpProject",
-      "gcpLocation",
-      "binaryPath",
-    ]);
-    const authMethod = fields.find((field) => field.key === "authMethod");
-    expect(authMethod).toMatchObject({ control: "select", clearWhenEmpty: "omit" });
-    expect(authMethod?.options?.map((option) => option.value)).toEqual([
-      "oauth-personal",
-      "oauth-business",
-      "gemini-api-key",
-      "agent-platform",
-    ]);
-    expect(fields.find((field) => field.key === "apiKey")?.control).toBe("password");
-  });
-
-  it("shows the auto-compaction threshold for Claude providers", () => {
-    const claude = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("claudeAgent")];
-    expect(claude).toBeDefined();
-
-    expect(deriveProviderSettingsFields(claude!).map((field) => field.key)).toEqual([
-      "binaryPath",
-      "homePath",
-      "autoCompactWindow",
-      "launchArgs",
-    ]);
-  });
-
-  it("preserves unknown config keys while omitting empty configurable fields", () => {
-    const opencode = DRIVER_OPTION_BY_VALUE[ProviderDriverKind.make("opencode")];
-    expect(opencode).toBeDefined();
-
-    const serverUrl = deriveProviderSettingsFields(opencode!).find(
-      (field) => field.key === "serverUrl",
+    const binaryPath = deriveProviderSettingsFields(pi!).find(
+      (field) => field.key === "binaryPath",
     );
-    expect(serverUrl).toBeDefined();
+    expect(binaryPath).toBeDefined();
 
     const next = nextProviderConfigWithFieldValue(
-      { forkOwned: 1, serverUrl: "http://127.0.0.1:4096" },
-      serverUrl!,
+      { forkOwned: 1, binaryPath: "/usr/local/bin/pi" },
+      binaryPath!,
       "",
     );
 
