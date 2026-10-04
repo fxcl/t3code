@@ -66,6 +66,14 @@ async function stagePackage(name: string, from: string, destination: string): Pr
 }
 
 it("loads packaged Cursor catalog chunks without credentials or checkout dependencies", async () => {
+  const serverDependencies: Readonly<Record<string, string>> = serverPackage.dependencies;
+  if (!("@cursor/sdk" in serverDependencies)) {
+    // Pi-only convergence removed the @cursor/sdk dependency and the
+    // provider/cursorSdk probe module, so there is no Cursor catalog
+    // packaging surface left to verify.
+    assert.ok(true);
+    return;
+  }
   const scratch = await NodeFSP.mkdtemp(NodePath.join(NodeOS.tmpdir(), "t3-cursor-package-"));
   try {
     // Missing staged dependencies must not resolve from a developer's /tmp tree.
@@ -108,9 +116,11 @@ it("loads packaged Cursor catalog chunks without credentials or checkout depende
         onlyBundle: false,
       },
     });
-    const roots = selectCliRuntimeExternalDependencies({
-      "@cursor/sdk": serverPackage.dependencies["@cursor/sdk"],
-    });
+    const roots = selectCliRuntimeExternalDependencies(
+      Object.fromEntries(
+        Object.entries(serverDependencies).filter(([name]) => name === "@cursor/sdk"),
+      ),
+    );
     for (const name of Object.keys(roots)) {
       await stagePackage(name, NodePath.join(repoRoot, "apps/server/package.json"), output);
     }

@@ -35,6 +35,10 @@ import {
 } from "./lib/cli-external-packages.ts";
 import { loadRepoEnv } from "./lib/public-config.ts";
 import { selectDesktopRuntimeExternalDependencies } from "./lib/desktop-external-packages.ts";
+import {
+  findRemovedProviderAsarEntries,
+  findRemovedProviderPackages,
+} from "./lib/packaged-pi-only.ts";
 import { resolveCatalogDependencies } from "./lib/resolve-catalog.ts";
 
 import * as NodeRuntime from "@effect/platform-node/NodeRuntime";
@@ -614,6 +618,18 @@ export class InlinedExternalPackageError extends Schema.TaggedError<InlinedExter
 ) {
   override get message(): string {
     return `The server bundle inlined packages that must stay external: ${this.packages.join(", ")}. These are native addons or their loaders; inlined, they resolve prebuilds relative to the bundle and silently lose native acceleration. Check the deps.neverBundle wiring in apps/server/vite.config.ts.`;
+  }
+}
+
+export class RemovedProviderPackageError extends Schema.TaggedError<RemovedProviderPackageError>()(
+  "RemovedProviderPackageError",
+  {
+    packages: Schema.Array(Schema.String),
+    surface: Schema.String,
+  },
+) {
+  override get message(): string {
+    return `Removed provider packages reached the ${this.surface}: ${this.packages.join(", ")}. The desktop artifact must ship Pi only; remove them from the build inputs.`;
   }
 }
 
@@ -2644,8 +2660,8 @@ export function resolvePackageManagerUserAgent(packageManager: string): string {
 
 export function resolveDesktopProductName(version: string): string {
   return resolveDesktopUpdateChannel(version) === "nightly"
-    ? "T3 Code (Nightly)"
-    : (desktopPackageJson.productName ?? "T3 Code");
+    ? "piCode (Nightly)"
+    : (desktopPackageJson.productName ?? "piCode");
 }
 
 export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
@@ -2709,6 +2725,13 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
           url: resolveMockUpdateServerUrl(mockUpdateServerPort),
         },
       ];
+    } else {
+      // No update repository and no mock server: this is a local build. Left
+      // unset, electron-builder infers a GitHub publish target from the git
+      // remote and then crashes computing update-channel names
+      // (`computeChannelNames` reads `.channel` of null). `null` disables
+      // publishing and the update-info artifacts outright.
+      buildConfig.publish = null;
     }
   }
 
@@ -2721,12 +2744,12 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       category: "public.app-category.developer-tools",
       extendInfo: {
         NSScreenCaptureUsageDescription:
-          "T3 Code captures the active window when you use the window capture shortcut.",
+          "piCode captures the active window when you use the window capture shortcut.",
       },
       protocols: [
         {
-          name: "T3 Code",
-          schemes: ["t3code", "t3code-dev"],
+          name: "picode",
+          schemes: ["picode", "picode-dev"],
         },
       ],
       ...(signed ? { sign: path.join(repoRoot, "scripts/sign-macos.ts") } : {}),
@@ -2768,7 +2791,7 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       // resources/package-type into the .deb only, so electron-updater updates
       // each install in its own format.
       target: target === "AppImage" ? [target, "deb"] : [target],
-      executableName: "t3code",
+      executableName: "piCode",
       icon: "icons",
       category: "Development",
       synopsis: "Desktop GUI for coding agents",
@@ -2776,16 +2799,16 @@ export const createBuildConfig = Effect.fn("createBuildConfig")(function* (
       maintainer: "T3 Tools <hello@t3.codes>",
       // electron-builder turns these into MimeType=x-scheme-handler/<scheme>;
       // in the .desktop entry (Exec already gets %U), so browsers can hand
-      // t3code:// OAuth callbacks to the app.
+      // picode:// OAuth callbacks to the app.
       protocols: [
         {
-          name: "T3 Code",
-          schemes: ["t3code", "t3code-dev"],
+          name: "picode",
+          schemes: ["picode", "picode-dev"],
         },
       ],
       desktop: {
         entry: {
-          StartupWMClass: "t3code",
+          StartupWMClass: "picode",
         },
       },
     };
@@ -3211,6 +3234,24 @@ export const validateWindowsPackagedPayload = Effect.fn(
       reason: "sidecar-invalid",
       packagedAppDir,
       cause: new Error("server.asar does not declare any unpacked native files"),
+    });
+  }
+
+  // The sidecar archives the server's node_modules; fail loudly if a removed
+  // provider package rode along (see scripts/lib/packaged-pi-only.ts).
+  const removedSidecarPackages = yield* Effect.try({
+    try: () => findRemovedProviderAsarEntries(getRawHeader(asarPath).header),
+    catch: (cause) =>
+      new WindowsPackagedPayloadValidationError({
+        reason: "sidecar-invalid",
+        packagedAppDir,
+        cause,
+      }),
+  });
+  if (removedSidecarPackages.length > 0) {
+    return yield* new RemovedProviderPackageError({
+      packages: removedSidecarPackages,
+      surface: "Windows server.asar sidecar",
     });
   }
 
@@ -3687,18 +3728,31 @@ const buildDesktopArtifact = Effect.fn("buildDesktopArtifact")(function* (
     workspacePatchedDependencies,
     stageDependencies,
   );
+  // Fail loudly if a removed provider or ACP package reaches any staged
+  // dependency surface (see scripts/lib/packaged-pi-only.ts). This runs for
+  // every platform, so both CI releases and local maintainer builds catch it.
+  const removedStagedPackages = findRemovedProviderPackages([
+    ...Object.keys(stageDependencies),
+    ...Object.keys(resolvedServerRuntimeExternalDependencies),
+  ]);
+  if (removedStagedPackages.length > 0) {
+    return yield* new RemovedProviderPackageError({
+      packages: removedStagedPackages,
+      surface: "staged dependency set",
+    });
+  }
   const windowsServerAsarPath =
     options.platform === "win"
       ? path.join(stageAppDir, WINDOWS_SERVER_RESOURCE_SOURCE_DIR, WINDOWS_SERVER_ASAR_RESOURCE)
       : undefined;
   const stagePackageJson: StagePackageJson = {
-    name: "t3code",
+    name: "picode",
     version: appVersion,
     buildVersion: appVersion,
     t3codeCommitHash: commitHash,
     private: true,
     packageManager: rootPackageJson.packageManager,
-    description: "T3 Code desktop build",
+    description: "piCode desktop build",
     // Required by the .deb control file.
     homepage: "https://t3.codes",
     author: "T3 Tools",
@@ -3986,7 +4040,7 @@ const buildDesktopArtifactCli = Command.make("build-desktop-artifact", {
     Flag.optional,
   ),
 }).pipe(
-  Command.withDescription("Build a desktop artifact for T3 Code."),
+  Command.withDescription("Build a desktop artifact for piCode."),
   Command.withHandler((input) => Effect.flatMap(resolveBuildOptions(input), buildDesktopArtifact)),
 );
 

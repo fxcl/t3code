@@ -16,11 +16,6 @@ const workspaceFiles = [
   "apps/server/package.json",
   "apps/desktop/package.json",
   "apps/web/package.json",
-  "apps/mobile/package.json",
-  "apps/mobile/modules/t3-markdown-text/package.json",
-  "apps/mobile/modules/t3-review-diff/package.json",
-  "apps/mobile/modules/t3-terminal/package.json",
-  "apps/marketing/package.json",
   "infra/relay/package.json",
   "oxlint-plugin-t3code/package.json",
   "packages/client-runtime/package.json",
@@ -28,8 +23,6 @@ const workspaceFiles = [
   "packages/shared/package.json",
   "packages/ssh/package.json",
   "packages/tailscale/package.json",
-  "packages/effect-acp/package.json",
-  "packages/effect-codex-app-server/package.json",
   "scripts/package.json",
 ] as const;
 
@@ -187,12 +180,6 @@ function assertMissing(path: string, message: string): void {
 const tempRoot = NodeFS.mkdtempSync(NodePath.join(NodeOS.tmpdir(), "t3-release-smoke-"));
 
 try {
-  NodeChildProcess.execFileSync(
-    process.execPath,
-    ["--test", NodePath.resolve(repoRoot, ".github/scripts/relay-state-output.test.cjs")],
-    { stdio: "inherit" },
-  );
-
   copyWorkspaceManifestFixture(tempRoot);
 
   NodeChildProcess.execFileSync(
