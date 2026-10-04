@@ -5,8 +5,8 @@ import { ProviderDriverKind, ProviderInstanceId } from "./providerInstance.ts";
 import {
   ClientSettingsSchema,
   ClientSettingsPatch,
-  ClaudeSettings,
   DEFAULT_SERVER_SETTINGS,
+  PiSettings,
   resolveProviderInstanceEnabled,
   ServerSettings,
   ServerSettingsPatch,
@@ -18,7 +18,7 @@ const encodeClientSettings = Schema.encodeSync(ClientSettingsSchema);
 const decodeServerSettings = Schema.decodeUnknownSync(ServerSettings);
 const decodeServerSettingsPatch = Schema.decodeUnknownSync(ServerSettingsPatch);
 const encodeServerSettings = Schema.encodeSync(ServerSettings);
-const decodeClaudeSettings = Schema.decodeUnknownSync(ClaudeSettings);
+const decodePiSettings = Schema.decodeUnknownSync(PiSettings);
 
 describe("ServerSettings response streaming", () => {
   it("defaults to paragraph buffering", () => {
@@ -199,7 +199,7 @@ describe("custom model settings", () => {
   };
 
   it("accepts legacy bare slugs alongside full entries", () => {
-    const decoded = decodeClaudeSettings({
+    const decoded = decodePiSettings({
       customModels: ["bare-slug", { slug: "named", name: "Named", capabilities }],
     });
     expect(decoded.customModels).toEqual([
@@ -211,41 +211,12 @@ describe("custom model settings", () => {
   it("accepts entries at the settings patch boundary", () => {
     expect(
       decodeServerSettingsPatch({
-        providers: { codex: { customModels: [{ slug: "x", capabilities }] } },
-      }).providers?.codex?.customModels,
+        providers: { pi: { customModels: [{ slug: "x", capabilities }] } },
+      }).providers?.pi?.customModels,
     ).toEqual([{ slug: "x", capabilities }]);
     expect(() =>
-      decodeServerSettingsPatch({ providers: { codex: { customModels: [{ name: "no slug" }] } } }),
+      decodeServerSettingsPatch({ providers: { pi: { customModels: [{ name: "no slug" }] } } }),
     ).toThrow();
-  });
-});
-
-describe("ClaudeSettings auto-compaction", () => {
-  it("uses Claude's default threshold when no override is configured", () => {
-    expect(decodeClaudeSettings({}).autoCompactWindow).toBe("");
-  });
-
-  it.each(["100000", "300000", "1000000"])(
-    "accepts a supported auto-compaction threshold: %s",
-    (value) => {
-      expect(decodeClaudeSettings({ autoCompactWindow: value }).autoCompactWindow).toBe(value);
-    },
-  );
-
-  it.each(["99999", "1000001", "300k", "invalid"])(
-    "rejects an unsupported auto-compaction threshold: %s",
-    (value) => {
-      expect(() => decodeClaudeSettings({ autoCompactWindow: value })).toThrow();
-    },
-  );
-
-  it("rejects an unsupported threshold at the settings patch boundary", () => {
-    expect(() =>
-      decodeServerSettingsPatch({ providers: { claudeAgent: { autoCompactWindow: "300k" } } }),
-    ).toThrow();
-    expect(
-      decodeServerSettingsPatch({ providers: { claudeAgent: { autoCompactWindow: "300000" } } }),
-    ).toBeDefined();
   });
 });
 
@@ -751,9 +722,9 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
   it("decodes a fully empty config (legacy on-disk shape) without complaint", () => {
     const decoded = decodeServerSettings({});
     expect(decoded.providerInstances).toEqual({});
-    // Legacy `providers` struct is still hydrated with its per-driver defaults
-    // so existing call sites keep working through the migration.
-    expect(decoded.providers.codex.enabled).toBe(true);
+    // The legacy `providers` struct still hydrates its `pi` default so
+    // existing call sites keep working through the migration.
+    expect(decoded.providers.pi.enabled).toBe(true);
   });
 
   it("decodes a multi-instance map mixing first-party and fork drivers", () => {
@@ -800,52 +771,66 @@ describe("ServerSettings.providerInstances (slice-2 invariant)", () => {
 });
 
 describe("provider enabled defaults", () => {
-  it("enables only the stable bindings by default", () => {
-    const decoded = decodeServerSettings({});
-    expect(decoded.providers.codex.enabled).toBe(true);
-    expect(decoded.providers.claudeAgent.enabled).toBe(true);
-    expect(decoded.providers.cursor.enabled).toBe(false);
-    expect(decoded.providers.grok.enabled).toBe(false);
-    expect(decoded.providers.opencode.enabled).toBe(false);
+  it("enables Pi by default, the only driver this build ships", () => {
+    expect(decodeServerSettings({}).providers.pi.enabled).toBe(true);
   });
 
-  it("keeps Cursor enabled when an existing user explicitly opted in", () => {
-    const cursor = ProviderDriverKind.make("cursor");
-    const cursorId = ProviderInstanceId.make("cursor");
+  it("decodes a stored document naming removed driver keys without error", () => {
+    // Persisted by a multi-driver build before this one narrowed the record
+    // to `pi`. The struct ignores unknown keys, so the document survives.
     const decoded = decodeServerSettings({
-      providers: { cursor: { enabled: true } },
+      providers: {
+        codex: { enabled: true, binaryPath: "codex" },
+        claudeAgent: { enabled: true },
+        cursor: { enabled: false },
+        grok: { enabled: false },
+        opencode: { enabled: false },
+        antigravity: { enabled: false, apiKey: "ignored" },
+        acpRegistry: { enabled: true },
+        pi: { enabled: true },
+      },
+    });
+    expect(Object.keys(decoded.providers)).toEqual(["pi"]);
+    expect(decoded.providers.pi.enabled).toBe(true);
+  });
+
+  it("keeps an explicit Pi opt-out through the settings boundary", () => {
+    const pi = ProviderDriverKind.make("pi");
+    const piId = ProviderInstanceId.make("pi");
+    const decoded = decodeServerSettings({
+      providers: { pi: { enabled: false } },
       providerInstances: {
-        [cursorId]: { driver: cursor, enabled: true, config: {} },
+        [piId]: { driver: pi, enabled: false, config: {} },
       },
     });
 
-    expect(decoded.providers.cursor.enabled).toBe(true);
-    expect(resolveProviderInstanceEnabled(decoded.providerInstances[cursorId]!)).toBe(true);
+    expect(decoded.providers.pi.enabled).toBe(false);
+    expect(resolveProviderInstanceEnabled(decoded.providerInstances[piId]!)).toBe(false);
   });
 
   it("resolves instance enabled state with explicit false winning", () => {
-    const grok = ProviderDriverKind.make("grok");
-    const codex = ProviderDriverKind.make("codex");
-    // No flags anywhere: driver default applies.
-    expect(resolveProviderInstanceEnabled({ driver: grok, config: {} })).toBe(false);
-    expect(resolveProviderInstanceEnabled({ driver: codex, config: {} })).toBe(true);
-    // Unknown fork drivers stay enabled.
+    const pi = ProviderDriverKind.make("pi");
+    // No flags anywhere: the Pi default (enabled) applies.
+    expect(resolveProviderInstanceEnabled({ driver: pi, config: {} })).toBe(true);
+    // Unknown fork and removed-driver slugs stay enabled too: the narrowed
+    // providers record no longer carries per-driver defaults for them.
     expect(
       resolveProviderInstanceEnabled({ driver: ProviderDriverKind.make("ollama"), config: {} }),
     ).toBe(true);
+    expect(
+      resolveProviderInstanceEnabled({ driver: ProviderDriverKind.make("codex"), config: {} }),
+    ).toBe(true);
     // Envelope flag wins over the driver default.
-    expect(resolveProviderInstanceEnabled({ driver: grok, enabled: true, config: {} })).toBe(true);
-    expect(resolveProviderInstanceEnabled({ driver: codex, enabled: false, config: {} })).toBe(
-      false,
-    );
+    expect(resolveProviderInstanceEnabled({ driver: pi, enabled: true, config: {} })).toBe(true);
+    expect(resolveProviderInstanceEnabled({ driver: pi, enabled: false, config: {} })).toBe(false);
     // Legacy in-config flag fills in when the envelope is silent.
-    expect(resolveProviderInstanceEnabled({ driver: grok, config: { enabled: true } })).toBe(true);
+    expect(resolveProviderInstanceEnabled({ driver: pi, config: { enabled: false } })).toBe(false);
     // Conflicting flags: the explicit false wins, whichever side it is on.
     expect(
-      resolveProviderInstanceEnabled({ driver: grok, enabled: true, config: { enabled: false } }),
+      resolveProviderInstanceEnabled({ driver: pi, enabled: true, config: { enabled: false } }),
     ).toBe(false);
     expect(
-      resolveProviderInstanceEnabled({ driver: codex, enabled: false, config: { enabled: true } }),
+      resolveProviderInstanceEnabled({ driver: pi, enabled: false, config: { enabled: true } }),
     ).toBe(false);
   });
 });
@@ -892,8 +877,8 @@ describe("ServerSettings worktree defaults", () => {
   });
 });
 
-describe("ServerSettings Cursor legacy settings", () => {
-  it("preserves V1 Cursor CLI settings when reading and writing shared settings", () => {
+describe("ServerSettings legacy provider keys", () => {
+  it("drops removed-driver keys from a stored document while keeping Pi", () => {
     const decoded = decodeServerSettings({
       providers: {
         cursor: {
@@ -901,17 +886,16 @@ describe("ServerSettings Cursor legacy settings", () => {
           binaryPath: "cursor-agent",
           apiEndpoint: "http://127.0.0.1:3774",
         },
+        pi: { binaryPath: "pi" },
       },
     });
 
-    expect(decoded.providers.cursor.enabled).toBe(true);
-    expect(encodeServerSettings(decoded).providers?.cursor).toMatchObject({
-      binaryPath: "cursor-agent",
-      apiEndpoint: "http://127.0.0.1:3774",
-    });
+    expect(decoded.providers.pi).toMatchObject({ binaryPath: "pi" });
+    expect(decoded.providers).not.toHaveProperty("cursor");
+    expect(Object.keys(encodeServerSettings(decoded).providers ?? {})).toEqual(["pi"]);
   });
 
-  it("ignores obsolete Cursor CLI settings in patches", () => {
+  it("ignores removed-driver keys in patches", () => {
     const patch = decodeServerSettingsPatch({
       providers: {
         cursor: {
@@ -922,9 +906,7 @@ describe("ServerSettings Cursor legacy settings", () => {
       },
     });
 
-    expect(patch.providers?.cursor?.enabled).toBe(true);
-    expect(patch.providers?.cursor).not.toHaveProperty("binaryPath");
-    expect(patch.providers?.cursor).not.toHaveProperty("apiEndpoint");
+    expect(patch.providers).toEqual({});
   });
 });
 
@@ -994,9 +976,8 @@ describe("ServerSettingsPatch string normalization", () => {
         otlpTracesUrl: "  http://localhost:4318/v1/traces  ",
       },
       providers: {
-        codex: {
-          binaryPath: "  /opt/homebrew/bin/codex  ",
-          homePath: "  ~/.codex  ",
+        pi: {
+          binaryPath: "  /opt/homebrew/bin/pi  ",
           launchArgs: "  --strict-config --enable foo  ",
         },
       },
@@ -1012,9 +993,8 @@ describe("ServerSettingsPatch string normalization", () => {
     expect(patch.addProjectBaseDirectory).toBe("~/Development");
     expect(patch.textGenerationModelSelection?.model).toBe("gpt-5.4-mini");
     expect(patch.observability?.otlpTracesUrl).toBe("http://localhost:4318/v1/traces");
-    expect(patch.providers?.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
-    expect(patch.providers?.codex?.homePath).toBe("~/.codex");
-    expect(patch.providers?.codex?.launchArgs).toBe("--strict-config --enable foo");
+    expect(patch.providers?.pi?.binaryPath).toBe("/opt/homebrew/bin/pi");
+    expect(patch.providers?.pi?.launchArgs).toBe("--strict-config --enable foo");
     expect(patch.providerInstances?.[ProviderInstanceId.make("codex_personal")]?.driver).toBe(
       "codex",
     );
@@ -1033,17 +1013,17 @@ describe("ServerSettingsPatch string normalization", () => {
       addProjectBaseDirectory: "  ~/Development  ",
       providers: {
         ...defaultSettings.providers,
-        codex: {
-          ...defaultSettings.providers.codex,
-          binaryPath: "  /opt/homebrew/bin/codex  ",
+        pi: {
+          ...defaultSettings.providers.pi,
+          binaryPath: "  /opt/homebrew/bin/pi  ",
           launchArgs: "  --strict-config  ",
         },
       },
     });
 
     expect(encoded.addProjectBaseDirectory).toBe("~/Development");
-    expect(encoded.providers?.codex?.binaryPath).toBe("/opt/homebrew/bin/codex");
-    expect(encoded.providers?.codex?.launchArgs).toBe("--strict-config");
+    expect(encoded.providers?.pi?.binaryPath).toBe("/opt/homebrew/bin/pi");
+    expect(encoded.providers?.pi?.launchArgs).toBe("--strict-config");
   });
 });
 

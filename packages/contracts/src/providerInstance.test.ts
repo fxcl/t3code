@@ -204,3 +204,37 @@ describe("ProviderInstanceConfigMap", () => {
     ).toThrow();
   });
 });
+
+describe("Pi-only build compatibility", () => {
+  // This build ships Pi alone, but ProviderDriverKind stays an open branded
+  // slug: records persisted by multi-driver builds (or by forks) must keep
+  // parsing so the runtime can surface them as unavailable instead of the
+  // schema rejecting the whole settings document.
+  it("still parses providerInstances naming drivers this build does not ship", () => {
+    const decoded = decodeProviderInstanceConfigMap({
+      pi_default: { driver: "pi", config: { binaryPath: "pi" } },
+      codex_personal: {
+        driver: "codex",
+        displayName: "Codex (personal)",
+        config: { homePath: "~/.codex_personal" },
+      },
+      claudeAgent: { driver: "claudeAgent" },
+    });
+    expect(decoded[ProviderInstanceId.make("pi_default")]?.driver).toBe("pi");
+    expect(decoded[ProviderInstanceId.make("codex_personal")]?.driver).toBe("codex");
+    expect(decoded[ProviderInstanceId.make("codex_personal")]?.config).toEqual({
+      homePath: "~/.codex_personal",
+    });
+    expect(decoded[ProviderInstanceId.make("claudeAgent")]?.driver).toBe("claudeAgent");
+  });
+
+  it("never rejects an unknown driver kind the schema has never heard of", () => {
+    const config = { someFutureKnob: true };
+    const decoded = decodeProviderInstanceConfig({
+      driver: "totally-unknown-driver",
+      config,
+    });
+    expect(decoded.driver).toBe("totally-unknown-driver");
+    expect(decoded.config).toEqual(config);
+  });
+});
