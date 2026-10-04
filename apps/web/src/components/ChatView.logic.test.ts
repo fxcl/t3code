@@ -4,11 +4,7 @@ import {
   rememberCheckoutIsRepo,
   threadShellHasStarted,
 } from "./ChatView.logic";
-import {
-  ANTIGRAVITY_DEFAULT_MODEL,
-  ProviderDriverKind,
-  type ServerProvider,
-} from "@t3tools/contracts";
+import { ProviderDriverKind, type ServerProvider } from "@t3tools/contracts";
 import { deriveProviderInstanceEntries, NO_PROVIDER_MODEL_SELECTION } from "../providerInstances";
 import type { RightPanelSurface } from "../rightPanelStore";
 import {
@@ -37,7 +33,6 @@ import { makeThreadFixture, makeThreadProjectionFixture } from "../test-fixtures
 import {
   agentControlledBrowserCloseConfirmation,
   ENVIRONMENT_RECONNECT_WARNING_GRACE_MS,
-  getAntigravitySendBlockReason,
   resolveBackgroundDraftWorkspaceOptions,
   resolveComposerInteractionMode,
   restorePlanFollowUpComposer,
@@ -105,8 +100,8 @@ function makeThread(overrides: Partial<Thread> = {}): Thread {
     projectId,
     title: "Thread",
     modelSelection: {
-      instanceId: ProviderInstanceId.make("codex"),
-      model: "gpt-5.4",
+      instanceId: ProviderInstanceId.make("pi"),
+      model: "pi-sonic",
     },
     runtimeMode: "full-access",
     interactionMode: "default",
@@ -135,8 +130,8 @@ const completedTurn = {
 
 const readySession = {
   status: "completed" as const,
-  providerName: "codex",
-  providerInstanceId: ProviderInstanceId.make("codex"),
+  providerName: "pi",
+  providerInstanceId: ProviderInstanceId.make("pi"),
   activeRunId: null,
   lastError: null,
   updatedAt: "2026-03-29T00:00:10.000Z",
@@ -240,8 +235,8 @@ describe("resolveEffectiveInteractionMode", () => {
 
 describe("resolveThreadMetadataUpdateForNextTurn", () => {
   const modelSelection = {
-    instanceId: ProviderInstanceId.make("codex"),
-    model: "gpt-5.4",
+    instanceId: ProviderInstanceId.make("pi"),
+    model: "pi-sonic",
   };
 
   it("updates a stale local thread branch to the active checkout", () => {
@@ -355,10 +350,10 @@ describe("buildExpiredTerminalContextToastCopy", () => {
 describe("getStartedThreadModelChangeBlockReason", () => {
   const providers = [
     {
-      instanceId: ProviderInstanceId.make("codex"),
+      instanceId: ProviderInstanceId.make("pi"),
     },
     {
-      instanceId: ProviderInstanceId.make("grok"),
+      instanceId: ProviderInstanceId.make("pi_locked"),
       requiresNewThreadForModelChange: true,
     },
   ];
@@ -369,12 +364,12 @@ describe("getStartedThreadModelChangeBlockReason", () => {
         providers,
         hasStartedSession: false,
         currentModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-build",
+          instanceId: ProviderInstanceId.make("pi_locked"),
+          model: "pi-build",
         },
         nextModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-other",
+          instanceId: ProviderInstanceId.make("pi_locked"),
+          model: "pi-other",
         },
       }),
     ).toBeNull();
@@ -386,12 +381,12 @@ describe("getStartedThreadModelChangeBlockReason", () => {
         providers,
         hasStartedSession: true,
         currentModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-build",
+          instanceId: ProviderInstanceId.make("pi_locked"),
+          model: "pi-build",
         },
         nextModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-build",
+          instanceId: ProviderInstanceId.make("pi_locked"),
+          model: "pi-build",
         },
       }),
     ).toBeNull();
@@ -403,12 +398,12 @@ describe("getStartedThreadModelChangeBlockReason", () => {
         providers,
         hasStartedSession: true,
         currentModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-build",
+          instanceId: ProviderInstanceId.make("pi_locked"),
+          model: "pi-build",
         },
         nextModelSelection: {
-          instanceId: ProviderInstanceId.make("grok"),
-          model: "grok-other",
+          instanceId: ProviderInstanceId.make("pi_locked"),
+          model: "pi-other",
         },
       }),
     ).toEqual({
@@ -1319,10 +1314,6 @@ describe("environment reconnect warning grace", () => {
 });
 
 describe("resolveComposerProviderSelection", () => {
-  const catalogModels: ServerProvider["models"] = [
-    { slug: "gemini-pro", name: "Gemini Pro", isCustom: false, capabilities: null },
-  ];
-
   function entry(driver: string, instanceId = driver, overrides: Partial<ServerProvider> = {}) {
     return deriveProviderInstanceEntries([
       {
@@ -1349,13 +1340,9 @@ describe("resolveComposerProviderSelection", () => {
     });
   }
 
-  it.each([
-    ["claudeAgent", "claude_work"],
-    ["codex", "codex_work"],
-    ["ollama", "local_models"],
-  ])("keeps imported %s history selectable through its custom instance", (driver, instanceId) => {
-    const importedEntry = entry(driver, instanceId);
-    const entries = [entry(driver === "codex" ? "claudeAgent" : "codex"), importedEntry];
+  it("keeps imported history selectable through its custom instance", () => {
+    const importedEntry = entry("pi", "pi_work");
+    const entries = [entry("pi"), importedEntry];
     const thread = importedThread(importedEntry.instanceId);
     const lockedProvider = deriveLockedProvider({
       thread,
@@ -1365,7 +1352,7 @@ describe("resolveComposerProviderSelection", () => {
     });
 
     expect(thread.runtime).toBeNull();
-    expect(lockedProvider).toBe(driver);
+    expect(lockedProvider).toBe(importedEntry.driverKind);
     expect(
       resolveComposerProviderSelection({
         entries,
@@ -1377,8 +1364,8 @@ describe("resolveComposerProviderSelection", () => {
   });
 
   it("keeps the session driver authoritative over instance and draft selections", () => {
-    const selected = entry("claudeAgent", "claude_work");
-    const sessionEntry = entry("ollama", "local_models");
+    const selected = entry("pi", "pi_work");
+    const sessionEntry = entry("pi", "pi_session");
     const thread = importedThread(selected.instanceId);
 
     expect(
@@ -1399,10 +1386,10 @@ describe("resolveComposerProviderSelection", () => {
   });
 
   it.each(["missing", "disabled"] as const)(
-    "does not move imported history to another driver when its instance is %s",
+    "does not move imported history to another instance when its instance is %s",
     (state) => {
-      const imported = entry("claudeAgent", "claude_work", { enabled: false });
-      const other = entry("codex");
+      const imported = entry("pi", "pi_work", { enabled: false });
+      const other = entry("pi");
       const entries = state === "missing" ? [other] : [other, imported];
       const thread = importedThread(imported.instanceId);
       const lockedProvider = deriveLockedProvider({
@@ -1425,8 +1412,8 @@ describe("resolveComposerProviderSelection", () => {
   );
 
   it("leaves a new draft free to select a different driver", () => {
-    const original = entry("claudeAgent", "claude_work");
-    const selected = entry("codex", "codex_work");
+    const original = entry("pi", "pi_work");
+    const selected = entry("pi", "pi_default");
     expect(
       deriveLockedProvider({
         thread: makeThread({
@@ -1440,10 +1427,10 @@ describe("resolveComposerProviderSelection", () => {
   });
 
   it("uses the custom instance's capability instead of the default instance", () => {
-    const defaultEntry = entry("antigravity", "antigravity", {
+    const defaultEntry = entry("pi", "pi", {
       showInteractionModeToggle: true,
     });
-    const customEntry = entry("antigravity", "google_work", {
+    const customEntry = entry("pi", "pi_work", {
       showInteractionModeToggle: false,
     });
     const selection = resolveComposerProviderSelection({
@@ -1464,11 +1451,11 @@ describe("resolveComposerProviderSelection", () => {
   });
 
   it("uses the fallback provider's plan capability after the draft's instance is disabled", () => {
-    const disabledEntry = entry("antigravity", "antigravity", {
+    const disabledEntry = entry("pi", "pi", {
       enabled: false,
       showInteractionModeToggle: false,
     });
-    const fallbackEntry = entry("codex");
+    const fallbackEntry = entry("pi", "pi_fallback");
     const selection = resolveComposerProviderSelection({
       entries: [disabledEntry, fallbackEntry],
       candidateInstanceIds: [disabledEntry.instanceId],
@@ -1486,106 +1473,27 @@ describe("resolveComposerProviderSelection", () => {
     ).toEqual({ enabled: true, interactionMode: "plan" });
   });
 
-  it("keeps a signed-out selection instead of silently switching providers", () => {
-    const signedOutEntry = entry("antigravity", "google_work", {
+  it("keeps a signed-out selection instead of silently switching instances", () => {
+    const signedOutEntry = entry("pi", "pi_work", {
       status: "error",
       auth: { status: "unauthenticated" },
-      models: catalogModels,
     });
     const selection = resolveComposerProviderSelection({
-      entries: [entry("codex"), signedOutEntry],
+      entries: [entry("pi"), signedOutEntry],
       candidateInstanceIds: [signedOutEntry.instanceId],
       lockedProvider: null,
       lockedInstanceId: null,
     });
 
     expect(selection.selectedProviderEntry?.instanceId).toBe(signedOutEntry.instanceId);
-    expect(
-      getAntigravitySendBlockReason(selection.selectedProviderEntry?.snapshot, "gemini-pro"),
-    ).toBe("Sign in to Antigravity in provider settings before sending.");
   });
 
-  it("blocks sends until the selected Antigravity profile is installed", () => {
-    const provider = entry("antigravity", "google_work", {
-      installed: false,
-      models: catalogModels,
-    }).snapshot;
-
-    expect(getAntigravitySendBlockReason(provider, "gemini-pro")).toBe(
-      "Install Antigravity in provider settings before sending.",
-    );
-  });
-
-  it("lets Antigravity check saved credentials when resuming after a restart", () => {
-    const provider = entry("antigravity", "google_work", {
-      status: "warning",
-      auth: { status: "unknown" },
-      models: [],
-    }).snapshot;
-
-    expect(getAntigravitySendBlockReason(provider, "gemini-pro")).toBeNull();
-    expect(getAntigravitySendBlockReason(provider, ANTIGRAVITY_DEFAULT_MODEL)).toBeNull();
-    expect(
-      getAntigravitySendBlockReason({ ...provider, models: catalogModels }, "gemini-pro"),
-    ).toBeNull();
-    expect(getAntigravitySendBlockReason(provider, "")).toBe(
-      "Choose an Antigravity model before sending.",
-    );
-  });
-
-  it("blocks saved model sends until Antigravity loads its account catalog", () => {
-    expect(getAntigravitySendBlockReason(entry("antigravity").snapshot, "gemini-pro")).toBe(
-      "Refresh Antigravity models in provider settings before sending.",
-    );
-  });
-
-  it("blocks an empty Antigravity selection after the catalog has loaded", () => {
-    const provider = entry("antigravity", "google_work", { models: catalogModels }).snapshot;
-
-    expect(getAntigravitySendBlockReason(provider, "")).toBe(
-      "Choose an Antigravity model before sending.",
-    );
-  });
-
-  it("blocks a saved model that a ready catalog no longer lists", () => {
-    const provider = entry("antigravity", "google_work", {
-      status: "ready",
-      models: catalogModels,
-    }).snapshot;
-
-    expect(getAntigravitySendBlockReason(provider, "saved-model-not-in-current-catalog")).toBe(
-      "That Antigravity model is no longer available. Choose another model.",
-    );
-    expect(getAntigravitySendBlockReason(provider, "gemini-pro")).toBeNull();
-  });
-
-  it("allows a saved native model to retry after a provider error without changing it", () => {
-    const provider = entry("antigravity", "google_work", {
-      status: "error",
-      models: catalogModels,
-    }).snapshot;
-
-    expect(
-      getAntigravitySendBlockReason(provider, "saved-model-not-in-current-catalog"),
-    ).toBeNull();
-  });
-
-  it("keeps existing send behavior for other providers", () => {
-    const provider = entry("codex", "codex", {
-      installed: false,
-      auth: { status: "unknown" },
-      models: [],
-    }).snapshot;
-
-    expect(getAntigravitySendBlockReason(provider, "gpt-model")).toBeNull();
-  });
-
-  it("does not continue an existing Antigravity thread in another profile after deletion", () => {
-    const missingInstanceId = ProviderInstanceId.make("google_work");
+  it("does not continue an existing thread in another profile after deletion", () => {
+    const missingInstanceId = ProviderInstanceId.make("pi_work");
     const selection = resolveComposerProviderSelection({
-      entries: [entry("antigravity")],
+      entries: [entry("pi")],
       candidateInstanceIds: [missingInstanceId],
-      lockedProvider: ProviderDriverKind.make("antigravity"),
+      lockedProvider: ProviderDriverKind.make("pi"),
       lockedInstanceId: missingInstanceId,
     });
 
@@ -1595,7 +1503,7 @@ describe("resolveComposerProviderSelection", () => {
 
   it("does not treat the empty draft placeholder as a provider setup target", () => {
     const selection = resolveComposerProviderSelection({
-      entries: [entry("antigravity", "antigravity", { enabled: false })],
+      entries: [entry("pi", "pi", { enabled: false })],
       candidateInstanceIds: [NO_PROVIDER_MODEL_SELECTION.instanceId],
       lockedProvider: null,
       lockedInstanceId: null,
@@ -1606,17 +1514,17 @@ describe("resolveComposerProviderSelection", () => {
   });
 
   it("keeps the session's continuation group when another instance was selected", () => {
-    const sessionEntry = entry("antigravity", "google_work", {
+    const sessionEntry = entry("pi", "pi_work", {
       enabled: false,
       continuation: { groupKey: "work-profile" },
     });
-    const anotherEntry = entry("antigravity", "google_personal", {
+    const anotherEntry = entry("pi", "pi_personal", {
       continuation: { groupKey: "personal-profile" },
     });
     const selection = resolveComposerProviderSelection({
       entries: [sessionEntry, anotherEntry],
       candidateInstanceIds: [anotherEntry.instanceId, sessionEntry.instanceId],
-      lockedProvider: ProviderDriverKind.make("antigravity"),
+      lockedProvider: ProviderDriverKind.make("pi"),
       lockedInstanceId: sessionEntry.instanceId,
     });
 

@@ -17,15 +17,11 @@ const atoms = vi.hoisted(() => ({
   providersAtom: Symbol("providers"),
   refreshProviders: Symbol("refreshProviders"),
   updateProvider: Symbol("updateProvider"),
-  uninstallAcpRegistryManagedBinary: Symbol("uninstallAcpRegistryManagedBinary"),
-  acceptAcpRegistryUrlAuth: Symbol("acceptAcpRegistryUrlAuth"),
 }));
 
 const commands = vi.hoisted(() => ({
   refresh: vi.fn(),
   updateProvider: vi.fn(),
-  uninstall: vi.fn(),
-  acceptUrlAuth: vi.fn(),
 }));
 
 const settingsState = vi.hoisted(() => ({
@@ -80,20 +76,12 @@ vi.mock("../../state/server", () => ({
     providersValueAtom: () => atoms.providersAtom,
     refreshProviders: atoms.refreshProviders,
     updateProvider: atoms.updateProvider,
-    uninstallAcpRegistryManagedBinary: atoms.uninstallAcpRegistryManagedBinary,
-    acceptAcpRegistryUrlAuth: atoms.acceptAcpRegistryUrlAuth,
   },
 }));
 
 vi.mock("../../state/use-atom-command", () => ({
   useAtomCommand: (atom: symbol) =>
-    atom === atoms.refreshProviders
-      ? commands.refresh
-      : atom === atoms.uninstallAcpRegistryManagedBinary
-        ? commands.uninstall
-        : atom === atoms.acceptAcpRegistryUrlAuth
-          ? commands.acceptUrlAuth
-          : commands.updateProvider,
+    atom === atoms.refreshProviders ? commands.refresh : commands.updateProvider,
 }));
 
 vi.mock("../../hooks/useSettings", () => ({
@@ -127,13 +115,13 @@ vi.mock("../../state/entities", () => ({
 import { EnvironmentProviderSettings } from "./ProviderSettingsPanel";
 
 const environmentId = EnvironmentId.make("remote-device");
-const codexId = ProviderInstanceId.make("codex");
-const customId = ProviderInstanceId.make("codex_work");
+const piId = ProviderInstanceId.make("pi");
+const customId = ProviderInstanceId.make("pi_work");
 
 function provider(): ServerProvider {
   return {
-    instanceId: codexId,
-    driver: ProviderDriverKind.make("codex"),
+    instanceId: piId,
+    driver: ProviderDriverKind.make("pi"),
     enabled: true,
     installed: true,
     version: "1.0.0",
@@ -147,7 +135,7 @@ function provider(): ServerProvider {
       status: "behind_latest",
       currentVersion: "1.0.0",
       latestVersion: "1.1.0",
-      updateCommand: "pnpm add -g @openai/codex@latest",
+      updateCommand: "npm install -g @earendil-works/pi-coding-agent",
       canUpdate: true,
       checkedAt: "2026-07-24T12:00:00.000Z",
       message: "Update available.",
@@ -211,45 +199,31 @@ describe("EnvironmentProviderSettings routing", () => {
       .mockResolvedValue({ _tag: "Success", value: {} });
     commands.refresh.mockReset().mockResolvedValue({ _tag: "Success" });
     commands.updateProvider.mockReset().mockResolvedValue({ _tag: "Success" });
-    commands.uninstall.mockReset().mockResolvedValue({ _tag: "Success", value: {} });
-    commands.acceptUrlAuth
-      .mockReset()
-      .mockResolvedValue({ _tag: "Success", value: { accepted: true } });
   });
 
-  it("shows Codex and Claude while hiding untouched disabled provider slots", () => {
+  it("shows Pi while hiding untouched disabled provider slots", () => {
     const panel = renderPanel();
-    for (const driver of ["codex", "claudeAgent"] as const) {
-      expect(
-        visitElements(
-          panel,
-          (element) => element.props.instanceId === driver && element.props.mode === "list",
-        ),
-      ).not.toBeNull();
-    }
-    for (const driver of ["cursor", "grok", "pi", "opencode", "antigravity"] as const) {
-      expect(
-        visitElements(
-          panel,
-          (element) => element.props.instanceId === driver && element.props.mode === "list",
-        ),
-      ).toBeNull();
-    }
+    expect(
+      visitElements(
+        panel,
+        (element) => element.props.instanceId === "pi" && element.props.mode === "list",
+      ),
+    ).not.toBeNull();
   });
 
   it("keeps explicitly configured providers visible when disabled", () => {
-    const grokId = ProviderInstanceId.make("grok");
+    const disabledId = ProviderInstanceId.make("pi_frozen");
     settingsState.value = {
       ...DEFAULT_UNIFIED_SETTINGS,
       providerInstances: {
-        [grokId]: { driver: ProviderDriverKind.make("grok"), enabled: false },
+        [disabledId]: { driver: ProviderDriverKind.make("pi"), enabled: false },
       },
     };
     const panel = renderPanel();
     expect(
       visitElements(
         panel,
-        (element) => element.props.instanceId === grokId && element.props.mode === "list",
+        (element) => element.props.instanceId === disabledId && element.props.mode === "list",
       ),
     ).not.toBeNull();
   });
@@ -259,10 +233,10 @@ describe("EnvironmentProviderSettings routing", () => {
       ...DEFAULT_UNIFIED_SETTINGS,
       providers: {
         ...DEFAULT_UNIFIED_SETTINGS.providers,
-        grok: {
-          ...DEFAULT_UNIFIED_SETTINGS.providers.grok,
+        pi: {
+          ...DEFAULT_UNIFIED_SETTINGS.providers.pi,
           enabled: false,
-          binaryPath: "/custom/grok",
+          binaryPath: "/custom/pi",
         },
       },
     };
@@ -270,7 +244,7 @@ describe("EnvironmentProviderSettings routing", () => {
     expect(
       visitElements(
         panel,
-        (element) => element.props.instanceId === "grok" && element.props.mode === "list",
+        (element) => element.props.instanceId === "pi" && element.props.mode === "list",
       ),
     ).not.toBeNull();
   });
@@ -298,7 +272,7 @@ describe("EnvironmentProviderSettings routing", () => {
     const providerCard = visitElements(
       panel,
       (element) =>
-        element.props.instanceId === codexId && typeof element.props.onRunUpdate === "function",
+        element.props.instanceId === piId && typeof element.props.onRunUpdate === "function",
     );
     expect(providerCard).not.toBeNull();
     (providerCard?.props.onRunUpdate as (() => void) | undefined)?.();
@@ -306,7 +280,7 @@ describe("EnvironmentProviderSettings routing", () => {
 
     expect(commands.updateProvider).toHaveBeenCalledWith({
       environmentId,
-      input: { provider: ProviderDriverKind.make("codex"), instanceId: codexId },
+      input: { provider: ProviderDriverKind.make("pi"), instanceId: piId },
     });
   });
 
@@ -314,7 +288,7 @@ describe("EnvironmentProviderSettings routing", () => {
     settingsState.value = {
       ...DEFAULT_UNIFIED_SETTINGS,
       providerInstances: {
-        [customId]: { driver: ProviderDriverKind.make("codex"), enabled: true },
+        [customId]: { driver: ProviderDriverKind.make("pi"), enabled: true },
       },
     };
     atoms.providers = [provider()];
@@ -324,21 +298,21 @@ describe("EnvironmentProviderSettings routing", () => {
   });
 
   it.each([
-    ["onFavoriteModelsChange", { favorites: [{ provider: codexId, model: "chosen" }] }],
+    ["onFavoriteModelsChange", { favorites: [{ provider: piId, model: "chosen" }] }],
     [
       "onHiddenModelsChange",
-      { providerModelPreferences: { [codexId]: { hiddenModels: ["chosen"], modelOrder: [] } } },
+      { providerModelPreferences: { [piId]: { hiddenModels: ["chosen"], modelOrder: [] } } },
     ],
     [
       "onModelOrderChange",
-      { providerModelPreferences: { [codexId]: { hiddenModels: [], modelOrder: ["chosen"] } } },
+      { providerModelPreferences: { [piId]: { hiddenModels: [], modelOrder: ["chosen"] } } },
     ],
   ])("saves %s on this device without changing the selected server", (action, expected) => {
     atoms.providers = [provider()];
     const panel = renderPanel();
     const editor = visitElements(
       panel,
-      (element) => element.props.instanceId === codexId && element.props.mode === "editor",
+      (element) => element.props.instanceId === piId && element.props.mode === "editor",
     );
     expect(editor).not.toBeNull();
     if (!editor) throw new Error("Provider editor was not rendered");
@@ -359,7 +333,7 @@ describe("EnvironmentProviderSettings routing", () => {
       ...DEFAULT_UNIFIED_SETTINGS,
       providerInstances: {
         [customId]: {
-          driver: ProviderDriverKind.make("codex"),
+          driver: ProviderDriverKind.make("pi"),
           enabled: true,
         },
       },
@@ -422,12 +396,12 @@ describe("EnvironmentProviderSettings routing", () => {
     settingsState.value = {
       ...DEFAULT_UNIFIED_SETTINGS,
       providerInstances: {
-        [codexId]: {
-          driver: ProviderDriverKind.make("codex"),
+        [piId]: {
+          driver: ProviderDriverKind.make("pi"),
           enabled: false,
         },
         [customId]: {
-          driver: ProviderDriverKind.make("codex"),
+          driver: ProviderDriverKind.make("pi"),
           enabled: true,
         },
       },
@@ -459,13 +433,13 @@ describe("EnvironmentProviderSettings routing", () => {
     settingsState.mutateProviderInstance.mockClear();
     const defaultRow = visitElements(
       panel,
-      (element) => element.props.instanceId === codexId && element.props.mode === "list",
+      (element) => element.props.instanceId === piId && element.props.mode === "list",
     );
     (defaultRow?.props.onSelect as (() => void) | undefined)?.();
     panel = renderPanel();
     const defaultCard = visitElements(
       panel,
-      (element) => element.props.instanceId === codexId && element.props.mode === "editor",
+      (element) => element.props.instanceId === piId && element.props.mode === "editor",
     );
     const resetAction = defaultCard?.props.headerAction;
     const resetButton = visitElements(
@@ -477,7 +451,7 @@ describe("EnvironmentProviderSettings routing", () => {
     await flushPromises();
 
     const [resetMutation, resetPatch] = settingsState.mutateProviderInstance.mock.lastCall ?? [];
-    expect(resetMutation).toEqual({ operation: "remove", instanceId: codexId });
+    expect(resetMutation).toEqual({ operation: "remove", instanceId: piId });
     expect(Object.keys(resetPatch ?? {}).sort()).toEqual(["providers"]);
     expect(resetPatch).not.toHaveProperty("favorites");
     expect(resetPatch).not.toHaveProperty("providerModelPreferences");
@@ -488,7 +462,7 @@ describe("EnvironmentProviderSettings routing", () => {
       ...DEFAULT_UNIFIED_SETTINGS,
       providerInstances: {
         [customId]: {
-          driver: ProviderDriverKind.make("codex"),
+          driver: ProviderDriverKind.make("pi"),
           enabled: true,
           displayName: "Work",
         },
@@ -497,7 +471,7 @@ describe("EnvironmentProviderSettings routing", () => {
     const panel = renderPanel();
     const card = visitElements(panel, (element) => element.props.instanceId === customId);
     const next = {
-      driver: ProviderDriverKind.make("codex"),
+      driver: ProviderDriverKind.make("pi"),
       enabled: false,
       displayName: "Work",
     };
@@ -510,54 +484,14 @@ describe("EnvironmentProviderSettings routing", () => {
     );
   });
 
-  it("lets the server decide managed ACP cleanup after an atomic delete", async () => {
-    const firstId = ProviderInstanceId.make("acpRegistry_kilo_one");
-    const secondId = ProviderInstanceId.make("acpRegistry_kilo_two");
-    const registryInstance = {
-      driver: ProviderDriverKind.make("acpRegistry"),
-      enabled: true,
-      config: { agentId: "kilo" },
-    };
-    settingsState.value = {
-      ...DEFAULT_UNIFIED_SETTINGS,
-      providerInstances: {
-        [firstId]: registryInstance,
-        [secondId]: registryInstance,
-      },
-    };
-    let panel = renderPanel();
-    const row = visitElements(
-      panel,
-      (element) => element.props.instanceId === firstId && element.props.mode === "list",
-    );
-    (row?.props.onSelect as (() => void) | undefined)?.();
-    panel = renderPanel();
-    const card = visitElements(
-      panel,
-      (element) => element.props.instanceId === firstId && element.props.mode === "editor",
-    );
-    (card?.props.onDelete as (() => void) | undefined)?.();
-    await flushPromises();
-
-    expect(settingsState.mutateProviderInstance).toHaveBeenCalledWith({
-      operation: "remove",
-      instanceId: firstId,
-    });
-    expect(commands.uninstall).toHaveBeenCalledWith({
-      environmentId,
-      input: { agentId: "kilo" },
-    });
-  });
-
-  it("keeps the signed-in ACP account visible when login methods are no longer advertised", () => {
-    const instanceId = ProviderInstanceId.make("acpRegistry_devin");
+  it("keeps the signed-in account visible when logout is no longer advertised", () => {
+    const instanceId = ProviderInstanceId.make("pi_work");
     settingsState.value = {
       ...DEFAULT_UNIFIED_SETTINGS,
       providerInstances: {
         [instanceId]: {
-          driver: ProviderDriverKind.make("acpRegistry"),
+          driver: ProviderDriverKind.make("pi"),
           enabled: true,
-          config: { agentId: "devin" },
         },
       },
     };
@@ -565,9 +499,8 @@ describe("EnvironmentProviderSettings routing", () => {
       {
         ...provider(),
         instanceId,
-        driver: ProviderDriverKind.make("acpRegistry"),
         auth: { status: "authenticated", canLogout: false },
-        setup: { canAuthenticate: false, canInstall: false },
+        setup: { canAuthenticate: true, canInstall: false },
       },
     ];
     const panel = renderPanel({ targetInstanceId: instanceId });
@@ -579,42 +512,5 @@ describe("EnvironmentProviderSettings routing", () => {
           element.type.name === "ProviderAuthenticationSection",
       ),
     ).not.toBeNull();
-  });
-
-  it("routes explicit ACP browser authentication consent to the selected environment", async () => {
-    const instanceId = ProviderInstanceId.make("acpRegistry_antigravity");
-    const action = {
-      elicitationId: "google-login-1",
-      url: "https://accounts.google.com/login",
-      message: "Continue with Google",
-    };
-    settingsState.value = {
-      ...DEFAULT_UNIFIED_SETTINGS,
-      providerInstances: {
-        [instanceId]: {
-          driver: ProviderDriverKind.make("acpRegistry"),
-          enabled: true,
-          config: { agentId: "antigravity" },
-        },
-      },
-    };
-    atoms.providers = [
-      {
-        ...provider(),
-        instanceId,
-        driver: ProviderDriverKind.make("acpRegistry"),
-        auth: { status: "unauthenticated", action },
-      },
-    ];
-
-    const panel = renderPanel();
-    const card = visitElements(panel, (element) => element.props.instanceId === instanceId);
-    (card?.props.onAcceptUrlAuth as ((candidate: typeof action) => void) | undefined)?.(action);
-    await flushPromises();
-
-    expect(commands.acceptUrlAuth).toHaveBeenCalledWith({
-      environmentId,
-      input: { instanceId, elicitationId: action.elicitationId },
-    });
   });
 });

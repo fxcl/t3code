@@ -13,9 +13,11 @@ import {
   selectOnboardingProvidersByDriver,
 } from "./providerReadiness.logic";
 
-const readyCodex: ServerProvider = {
-  instanceId: ProviderInstanceId.make("codex"),
-  driver: ProviderDriverKind.make("codex"),
+const PI_INSTALL_COMMAND = "npm install -g @earendil-works/pi-coding-agent";
+
+const readyPi: ServerProvider = {
+  instanceId: ProviderInstanceId.make("pi"),
+  driver: ProviderDriverKind.make("pi"),
   enabled: true,
   installed: true,
   version: "1.0.0",
@@ -28,24 +30,24 @@ const readyCodex: ServerProvider = {
 };
 
 describe("getOnboardingProviderState", () => {
-  it("treats an enabled Codex provider with ready status and unknown authentication as ready", () => {
-    expect(getOnboardingProviderState(readyCodex)).toBe("ready");
+  it("treats an enabled Pi provider with ready status and unknown authentication as ready", () => {
+    expect(getOnboardingProviderState(readyPi)).toBe("ready");
   });
 
   it("treats authenticated providers as ready only when their provider status is ready", () => {
-    expect(getOnboardingProviderState({ ...readyCodex, auth: { status: "authenticated" } })).toBe(
+    expect(getOnboardingProviderState({ ...readyPi, auth: { status: "authenticated" } })).toBe(
       "ready",
     );
     expect(
       getOnboardingProviderState({
-        ...readyCodex,
+        ...readyPi,
         auth: { status: "authenticated" },
         status: "error",
       }),
     ).toBe("attention");
     expect(
       getOnboardingProviderState({
-        ...readyCodex,
+        ...readyPi,
         auth: { status: "authenticated" },
         status: "warning",
       }),
@@ -55,24 +57,24 @@ describe("getOnboardingProviderState", () => {
   it("offers sign-in only when the server reports an authentication failure", () => {
     expect(
       getOnboardingProviderState({
-        ...readyCodex,
+        ...readyPi,
         status: "error",
         auth: { status: "unauthenticated" },
       }),
     ).toBe("signIn");
-    expect(getOnboardingProviderState({ ...readyCodex, status: "error" })).toBe("attention");
-    expect(getOnboardingProviderState({ ...readyCodex, status: "warning" })).toBe("attention");
+    expect(getOnboardingProviderState({ ...readyPi, status: "error" })).toBe("attention");
+    expect(getOnboardingProviderState({ ...readyPi, status: "warning" })).toBe("attention");
   });
 
   it("does not offer installation or sign-in for disabled providers", () => {
-    expect(getOnboardingProviderState({ ...readyCodex, enabled: false, installed: false })).toBe(
+    expect(getOnboardingProviderState({ ...readyPi, enabled: false, installed: false })).toBe(
       "disabled",
     );
-    expect(getOnboardingProviderState({ ...readyCodex, status: "disabled" })).toBe("disabled");
+    expect(getOnboardingProviderState({ ...readyPi, status: "disabled" })).toBe("disabled");
   });
 
   it("offers installation only when an enabled provider is missing", () => {
-    expect(getOnboardingProviderState({ ...readyCodex, installed: false, status: "error" })).toBe(
+    expect(getOnboardingProviderState({ ...readyPi, installed: false, status: "error" })).toBe(
       "install",
     );
   });
@@ -84,44 +86,40 @@ describe("getOnboardingProviderState", () => {
 
 describe("selectOnboardingProvidersByDriver", () => {
   it("prefers a ready instance with unknown authentication to an unauthenticated instance", () => {
-    const signedOutCodex: ServerProvider = {
-      ...readyCodex,
-      instanceId: ProviderInstanceId.make("codex_work"),
+    const signedOutPi: ServerProvider = {
+      ...readyPi,
+      instanceId: ProviderInstanceId.make("pi_work"),
       status: "error",
       auth: { status: "unauthenticated" },
     };
 
-    expect(selectOnboardingProvidersByDriver([signedOutCodex, readyCodex]).get("codex")).toBe(
-      readyCodex,
-    );
+    expect(selectOnboardingProvidersByDriver([signedOutPi, readyPi]).get("pi")).toBe(readyPi);
   });
 
   it("prefers a provider with an actionable sign-in over a failed provider", () => {
-    const failedCodex: ServerProvider = { ...readyCodex, status: "error" };
-    const signedOutCodex: ServerProvider = {
-      ...readyCodex,
-      instanceId: ProviderInstanceId.make("codex_work"),
+    const failedPi: ServerProvider = { ...readyPi, status: "error" };
+    const signedOutPi: ServerProvider = {
+      ...readyPi,
+      instanceId: ProviderInstanceId.make("pi_work"),
       status: "error",
       auth: { status: "unauthenticated" },
     };
 
-    expect(selectOnboardingProvidersByDriver([failedCodex, signedOutCodex]).get("codex")).toBe(
-      signedOutCodex,
-    );
+    expect(selectOnboardingProvidersByDriver([failedPi, signedOutPi]).get("pi")).toBe(signedOutPi);
   });
 
   it("prefers installed providers over missing or disabled instances", () => {
-    const disabledCodex: ServerProvider = { ...readyCodex, enabled: false };
-    const missingCodex: ServerProvider = {
-      ...readyCodex,
-      instanceId: ProviderInstanceId.make("codex_work"),
+    const disabledPi: ServerProvider = { ...readyPi, enabled: false };
+    const missingPi: ServerProvider = {
+      ...readyPi,
+      instanceId: ProviderInstanceId.make("pi_work"),
       installed: false,
       status: "error",
     };
 
-    expect(
-      selectOnboardingProvidersByDriver([disabledCodex, missingCodex, readyCodex]).get("codex"),
-    ).toBe(readyCodex);
+    expect(selectOnboardingProvidersByDriver([disabledPi, missingPi, readyPi]).get("pi")).toBe(
+      readyPi,
+    );
   });
 
   it("handles provider snapshots that have not arrived", () => {
@@ -130,24 +128,24 @@ describe("selectOnboardingProvidersByDriver", () => {
 
   it("keeps a ready custom account when the default account is signed out", () => {
     const signedOutDefault: ServerProvider = {
-      ...readyCodex,
+      ...readyPi,
       status: "error",
       auth: { status: "unauthenticated" },
     };
     const readyCustom: ServerProvider = {
-      ...readyCodex,
-      instanceId: ProviderInstanceId.make("codex_work"),
+      ...readyPi,
+      instanceId: ProviderInstanceId.make("pi_work"),
     };
 
-    expect(selectOnboardingProvidersByDriver([signedOutDefault, readyCustom]).get("codex")).toBe(
+    expect(selectOnboardingProvidersByDriver([signedOutDefault, readyCustom]).get("pi")).toBe(
       readyCustom,
     );
   });
 });
 
 describe("resolveOnboardingProviderLoginCommand", () => {
-  it("uses the selected Codex account binary", () => {
-    const provider = { ...readyCodex, instanceId: ProviderInstanceId.make("codex_work") };
+  it("uses the selected Pi account binary without a login subcommand", () => {
+    const provider = { ...readyPi, instanceId: ProviderInstanceId.make("pi_work") };
 
     expect(
       resolveOnboardingProviderLoginCommand(
@@ -157,99 +155,69 @@ describe("resolveOnboardingProviderLoginCommand", () => {
           providerInstances: {
             [provider.instanceId]: {
               driver: provider.driver,
-              config: { binaryPath: "/opt/codex-work/bin/codex" },
+              config: { binaryPath: "/opt/pi-work/bin/pi" },
             },
           },
         },
         "linux",
       ),
-    ).toBe("/opt/codex-work/bin/codex login");
+    ).toBe("/opt/pi-work/bin/pi");
   });
 
-  it("uses the selected Claude account binary", () => {
-    const provider: ServerProvider = {
-      ...readyCodex,
-      driver: ProviderDriverKind.make("claudeAgent"),
-      instanceId: ProviderInstanceId.make("claude_work"),
-    };
-
+  it("falls back to the default-slot Pi settings when the instance is unknown", () => {
     expect(
       resolveOnboardingProviderLoginCommand(
-        provider,
-        {
-          ...DEFAULT_SERVER_SETTINGS,
-          providerInstances: {
-            [provider.instanceId]: {
-              driver: provider.driver,
-              config: { binaryPath: "/opt/claude-work/bin/claude" },
-            },
-          },
-        },
-        "linux",
-      ),
-    ).toBe("/opt/claude-work/bin/claude auth login");
-  });
-
-  it("quotes a Codex path with spaces for PowerShell", () => {
-    expect(
-      resolveOnboardingProviderLoginCommand(
-        readyCodex,
+        readyPi,
         {
           ...DEFAULT_SERVER_SETTINGS,
           providers: {
             ...DEFAULT_SERVER_SETTINGS.providers,
-            codex: {
-              ...DEFAULT_SERVER_SETTINGS.providers.codex,
-              binaryPath: "C:\\Program Files\\Codex & Tools\\codex.exe",
+            pi: {
+              ...DEFAULT_SERVER_SETTINGS.providers.pi,
+              binaryPath: "/opt/custom-pi/pi",
+            },
+          },
+        },
+        "linux",
+      ),
+    ).toBe("/opt/custom-pi/pi");
+  });
+
+  it("quotes a Pi path with spaces for PowerShell", () => {
+    expect(
+      resolveOnboardingProviderLoginCommand(
+        readyPi,
+        {
+          ...DEFAULT_SERVER_SETTINGS,
+          providers: {
+            ...DEFAULT_SERVER_SETTINGS.providers,
+            pi: {
+              ...DEFAULT_SERVER_SETTINGS.providers.pi,
+              binaryPath: "C:\\Program Files\\Pi & Tools\\pi.exe",
             },
           },
         },
         "windows",
       ),
-    ).toBe("& 'C:\\Program Files\\Codex & Tools\\codex.exe' login");
-  });
-
-  it("quotes a Claude path with shell metacharacters on POSIX", () => {
-    const provider: ServerProvider = {
-      ...readyCodex,
-      driver: ProviderDriverKind.make("claudeAgent"),
-      instanceId: ProviderInstanceId.make("claude"),
-    };
-
-    expect(
-      resolveOnboardingProviderLoginCommand(
-        provider,
-        {
-          ...DEFAULT_SERVER_SETTINGS,
-          providers: {
-            ...DEFAULT_SERVER_SETTINGS.providers,
-            claudeAgent: {
-              ...DEFAULT_SERVER_SETTINGS.providers.claudeAgent,
-              binaryPath: "/opt/Claude Tools/$current/claude",
-            },
-          },
-        },
-        "linux",
-      ),
-    ).toBe("'/opt/Claude Tools/$current/claude' auth login");
+    ).toBe("& 'C:\\Program Files\\Pi & Tools\\pi.exe'");
   });
 
   it.each([
-    ["~/my tools/codex", "~/'my tools/codex' login"],
-    ["~\\my tools/codex", "~/'my tools/codex' login"],
-    ["~/tools/codex's build", `~/'tools/codex'"'"'s build' login`],
-    ["~\\tools\\codex's build", `~/'tools\\codex'"'"'s build' login`],
-    ["~/tools/codex; echo unsafe", "~/'tools/codex; echo unsafe' login"],
+    ["~/my tools/pi", "~/'my tools/pi'"],
+    ["~\\my tools/pi", "~/'my tools/pi'"],
+    ["~/tools/pi's build", `~/'tools/pi'"'"'s build'`],
+    ["~\\tools\\pi's build", `~/'tools\\pi'"'"'s build'`],
+    ["~/tools/pi; echo unsafe", "~/'tools/pi; echo unsafe'"],
   ])("keeps the home prefix expandable while quoting %s", (binaryPath, expectedCommand) => {
     expect(
       resolveOnboardingProviderLoginCommand(
-        readyCodex,
+        readyPi,
         {
           ...DEFAULT_SERVER_SETTINGS,
           providers: {
             ...DEFAULT_SERVER_SETTINGS.providers,
-            codex: {
-              ...DEFAULT_SERVER_SETTINGS.providers.codex,
+            pi: {
+              ...DEFAULT_SERVER_SETTINGS.providers.pi,
               binaryPath,
             },
           },
@@ -259,80 +227,70 @@ describe("resolveOnboardingProviderLoginCommand", () => {
     ).toBe(expectedCommand);
   });
 
-  it.each(["darwin", "linux"] as const)("quotes backslashes in a Codex path on %s", (platform) => {
+  it.each(["darwin", "linux"] as const)("quotes backslashes in a Pi path on %s", (platform) => {
     expect(
       resolveOnboardingProviderLoginCommand(
-        readyCodex,
+        readyPi,
         {
           ...DEFAULT_SERVER_SETTINGS,
           providers: {
             ...DEFAULT_SERVER_SETTINGS.providers,
-            codex: {
-              ...DEFAULT_SERVER_SETTINGS.providers.codex,
-              binaryPath: "/opt/codex\\work/codex",
+            pi: {
+              ...DEFAULT_SERVER_SETTINGS.providers.pi,
+              binaryPath: "/opt/pi\\work/pi",
             },
           },
         },
         platform,
       ),
-    ).toBe("'/opt/codex\\work/codex' login");
+    ).toBe("'/opt/pi\\work/pi'");
   });
 
   it("keeps a plain Windows path unquoted", () => {
     expect(
       resolveOnboardingProviderLoginCommand(
-        readyCodex,
+        readyPi,
         {
           ...DEFAULT_SERVER_SETTINGS,
           providers: {
             ...DEFAULT_SERVER_SETTINGS.providers,
-            codex: {
-              ...DEFAULT_SERVER_SETTINGS.providers.codex,
-              binaryPath: "C:\\Tools\\codex.exe",
+            pi: {
+              ...DEFAULT_SERVER_SETTINGS.providers.pi,
+              binaryPath: "C:\\Tools\\pi.exe",
             },
           },
         },
         "windows",
       ),
-    ).toBe("C:\\Tools\\codex.exe login");
+    ).toBe("C:\\Tools\\pi.exe");
   });
 
   it("uses the default command when an old server reports an unknown shell", () => {
     expect(
       resolveOnboardingProviderLoginCommand(
-        readyCodex,
+        readyPi,
         {
           ...DEFAULT_SERVER_SETTINGS,
           providers: {
             ...DEFAULT_SERVER_SETTINGS.providers,
-            codex: {
-              ...DEFAULT_SERVER_SETTINGS.providers.codex,
-              binaryPath: "/opt/Codex Tools/codex",
+            pi: {
+              ...DEFAULT_SERVER_SETTINGS.providers.pi,
+              binaryPath: "/opt/Pi Tools/pi",
             },
           },
         },
         "unknown",
       ),
-    ).toBe("codex login");
+    ).toBe("pi");
   });
 });
 
 describe("resolveOnboardingProviderInstallCommand", () => {
-  it("uses the PowerShell installer on Windows environments", () => {
-    expect(resolveOnboardingProviderInstallCommand("codex", "windows")).toBe(
-      "irm https://chatgpt.com/codex/install.ps1 | iex",
-    );
-    expect(resolveOnboardingProviderInstallCommand("claudeAgent", "windows")).toBe(
-      "irm https://claude.ai/install.ps1 | iex",
-    );
+  it("installs Pi through the global npm package on Windows environments", () => {
+    expect(resolveOnboardingProviderInstallCommand("pi", "windows")).toBe(PI_INSTALL_COMMAND);
   });
 
-  it.each(["darwin", "linux", "unknown"] as const)("uses the shell installer on %s", (platform) => {
-    expect(resolveOnboardingProviderInstallCommand("codex", platform)).toBe(
-      "curl -fsSL https://chatgpt.com/codex/install.sh | sh",
-    );
-    expect(resolveOnboardingProviderInstallCommand("claudeAgent", platform)).toBe(
-      "curl -fsSL https://claude.ai/install.sh | bash",
-    );
+  it.each(["darwin", "linux", "unknown"] as const)("installs Pi through npm on %s", (platform) => {
+    expect(resolveOnboardingProviderInstallCommand("pi", platform)).toBe(PI_INSTALL_COMMAND);
   });
 });

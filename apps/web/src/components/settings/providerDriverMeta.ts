@@ -1,14 +1,4 @@
-import {
-  AcpRegistrySettings,
-  AntigravitySettings,
-  ClaudeSettings,
-  CodexSettings,
-  CursorSettings,
-  GrokSettings,
-  OpenCodeSettings,
-  PiSettings,
-  ProviderDriverKind,
-} from "@t3tools/contracts";
+import { PiSettings, ProviderDriverKind } from "@t3tools/contracts";
 import type * as Schema from "effect/Schema";
 
 type ProviderSettingsSchema = {
@@ -48,54 +38,9 @@ export interface ProviderEnvironmentFieldDefinition {
 
 const PROVIDER_CLIENT_DEFINITIONS: readonly ProviderClientDefinition[] = [
   {
-    value: ProviderDriverKind.make("codex"),
-    label: "Codex",
-    settingsSchema: CodexSettings,
-  },
-  {
-    value: ProviderDriverKind.make("claudeAgent"),
-    label: "Claude",
-    settingsSchema: ClaudeSettings,
-  },
-  {
-    value: ProviderDriverKind.make("cursor"),
-    label: "Cursor",
-    settingsSchema: CursorSettings,
-    environmentFields: [
-      {
-        name: "CURSOR_API_KEY",
-        label: "Cursor API key",
-        description: "Optional. Overrides browser sign-in for this provider.",
-        placeholder: "Paste API key",
-        sensitive: true,
-      },
-    ],
-  },
-  {
-    value: ProviderDriverKind.make("grok"),
-    label: "Grok",
-    settingsSchema: GrokSettings,
-  },
-  {
-    value: ProviderDriverKind.make("opencode"),
-    label: "OpenCode",
-    settingsSchema: OpenCodeSettings,
-  },
-  {
-    value: ProviderDriverKind.make("antigravity"),
-    label: "Antigravity",
-    settingsSchema: AntigravitySettings,
-  },
-  {
     value: ProviderDriverKind.make("pi"),
     label: "Pi",
     settingsSchema: PiSettings,
-  },
-  {
-    value: ProviderDriverKind.make("acpRegistry"),
-    label: "ACP Registry",
-    settingsSchema: AcpRegistrySettings,
-    hasDefaultInstance: false,
   },
 ];
 
@@ -110,9 +55,9 @@ export const DRIVER_OPTION_BY_VALUE = PROVIDER_CLIENT_DEFINITION_BY_VALUE;
 export type DriverOption = ProviderClientDefinition;
 
 /**
- * Look up the driver metadata for an instance's `driver` field. Accepts
- * Returns `undefined` for fork / unknown drivers so callers can decide how
- * to render them — typically by falling back to a generic card.
+ * Look up the driver metadata for an instance's `driver` field. Returns
+ * `undefined` for fork / unknown drivers so callers can decide how to render
+ * them — typically by falling back to a generic card.
  */
 export function getDriverOption(driver: ProviderDriverKind | undefined): DriverOption | undefined {
   if (driver === undefined) return undefined;

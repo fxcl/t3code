@@ -1,10 +1,8 @@
 import {
-  CHATGPT_USAGE_URL,
   collectLimitAccounts,
   collectExternalUsageLinks,
   collectLimitNotices,
   collectLimitPools,
-  cursorUsageWindowDetails,
   displayLimitWindows,
   formatResetsIn,
   type LimitAccount,
@@ -14,7 +12,7 @@ import {
   remainingPercent,
 } from "@t3tools/shared/usageLimits";
 import { AlertTriangleIcon, ExternalLinkIcon, TicketIcon } from "lucide-react";
-import { Fragment, type ReactNode, useState } from "react";
+import { type ReactNode, useState } from "react";
 
 import { ensureLocalApi } from "../../localApi";
 import { usePrimarySettings } from "../../hooks/useSettings";
@@ -24,7 +22,6 @@ import { ProviderInstanceIcon } from "../chat/ProviderInstanceIcon";
 import { getDriverOption } from "../settings/providerDriverMeta";
 import { RedactedSensitiveText } from "../settings/RedactedSensitiveText";
 import { Button } from "../ui/button";
-import { OpenAI } from "../Icons";
 import { Alert, AlertTitle } from "../ui/alert";
 import { Popover, PopoverPopup, PopoverTrigger } from "../ui/popover";
 import {
@@ -545,15 +542,12 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
         {label}
       </h2>
       {windows.map((window) => {
-        const details = pool.driver === "cursor" ? cursorUsageWindowDetails(window.id) : undefined;
         return (
           <PoolWindowCard
             key={`${window.kind}:${window.id}`}
             pool={window}
             color={color}
             now={now}
-            label={details?.label}
-            description={details?.description}
           />
         );
       })}
@@ -569,50 +563,32 @@ function PoolSection({ pool, now }: { readonly pool: LimitPool; readonly now: nu
 export function UsageLimitsPooled({
   presentations,
   now,
-  cursorPrompt,
 }: {
   readonly presentations: Parameters<typeof collectLimitAccounts>[0];
   readonly now: number;
-  readonly cursorPrompt?: ReactNode;
 }) {
   const pools = collectLimitPools(collectLimitAccounts(presentations), now);
   const notices = collectLimitNotices(presentations);
   const externalLinks = collectExternalUsageLinks(presentations);
-  const cursorPromptAt =
-    Math.max(
-      pools.findIndex((pool) => pool.driver === "codex"),
-      pools.findIndex((pool) => pool.driver === "claudeAgent"),
-    ) + 1;
   return (
     <div className="flex flex-col gap-8">
-      {pools.length === 0 && notices.length === 0 && !cursorPrompt && externalLinks.length === 0 ? (
+      {pools.length === 0 && notices.length === 0 && externalLinks.length === 0 ? (
         <p className="text-sm text-muted-foreground">
           No provider on the selected environments reports subscription limits.
         </p>
       ) : null}
-      {pools.map((pool, index) => (
-        <Fragment key={pool.driver}>
-          {index === cursorPromptAt ? cursorPrompt : null}
-          <PoolSection pool={pool} now={now} />
-        </Fragment>
+      {pools.map((pool) => (
+        <PoolSection key={pool.driver} pool={pool} now={now} />
       ))}
-      {cursorPromptAt === pools.length ? cursorPrompt : null}
       {externalLinks.map((link) => (
         <section
           key={link.url}
           className="flex flex-wrap items-center justify-between gap-3 rounded-xl border p-4"
         >
           <div className="flex min-w-0 flex-1 items-center gap-3">
-            {link.url === CHATGPT_USAGE_URL ? (
-              <OpenAI className="size-5 shrink-0" aria-hidden="true" />
-            ) : null}
             <div className="min-w-0 space-y-1">
               <h2 className="text-sm font-medium">{link.label}</h2>
-              {link.url === CHATGPT_USAGE_URL ? (
-                <p className="text-xs text-muted-foreground">
-                  View usage in ChatGPT with your connected account.
-                </p>
-              ) : link.message ? (
+              {link.message ? (
                 <p className="max-w-xl text-xs text-muted-foreground">{link.message}</p>
               ) : null}
             </div>

@@ -92,7 +92,6 @@ export function SubagentTooltipContent(props: {
           <ProviderInstanceIcon
             driverKind={driver}
             displayName={props.provider?.displayName ?? driver}
-            acpRegistryIconUrl={props.provider?.iconUrl}
             iconClassName="size-3 shrink-0 grayscale opacity-60"
           />
         ) : (

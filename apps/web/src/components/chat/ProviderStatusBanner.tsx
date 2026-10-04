@@ -52,11 +52,7 @@ export function shouldShowProviderStatusBanner(
 }
 
 export function hasProviderSetup(status: ServerProvider): boolean {
-  return (
-    status.driver === "antigravity" ||
-    status.setup?.canAuthenticate === true ||
-    status.setup?.canInstall === true
-  );
+  return status.setup?.canAuthenticate === true || status.setup?.canInstall === true;
 }
 
 /** Broken-version guidance takes precedence over startup failures it can cause. */
@@ -75,9 +71,7 @@ export function getProviderStatusMessage(status: ServerProvider): string {
   }
   if (status.auth.status === "unauthenticated") {
     if (hasProviderSetup(status)) {
-      return status.driver === "antigravity"
-        ? "Open provider setup to sign in with Google."
-        : "Open provider setup to sign in.";
+      return "Open provider setup to sign in.";
     }
     return "Sign in via the CLI to authenticate again.";
   }

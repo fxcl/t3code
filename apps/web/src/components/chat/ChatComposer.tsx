@@ -77,6 +77,7 @@ import {
   collapseExpandedComposerCursor,
   composerSubmissionIntentForKey,
   composerStateAtPromptEnd,
+  composerSubmissionRequiresProvider,
   detectComposerTrigger,
   expandCollapsedComposerCursor,
   formatAssistantCitationForComposer,
@@ -85,8 +86,13 @@ import {
 import { DISCONNECTED_COMPOSER_PLACEHOLDER } from "../../composerPlaceholder";
 import { listContinuationForEnter, listIndentForTab } from "../../composer-list-continuation";
 import {
+  isNativeSlashCommand,
+  NATIVE_SLASH_COMMANDS,
+  type NativeSlashCommand,
+} from "../../nativeSlashCommands";
+import {
   deriveComposerSendState,
-  getAntigravitySendBlockReason,
+  reconcileMountedTerminalThreadIds,
   readFileAsDataUrl,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
@@ -1537,6 +1543,8 @@ export interface ChatComposerProps {
   bannerItems: readonly ComposerBannerStackItem[];
   /** Picking /usage-limits from the menu is the action itself; the draft keeps nothing of it. */
   onUsageLimitsCommand?: (() => void) | undefined;
+  /** Picking any other native slash command dispatches it through the chat view. */
+  onNativeSlashCommand?: ((command: NativeSlashCommand) => void) | undefined;
   environmentUnavailable: {
     readonly label: string;
     readonly connection: EnvironmentConnectionPresentation;
@@ -1772,6 +1780,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     toggleInteractionMode,
     handleRuntimeModeChange,
     handleInteractionModeChange,
+    onNativeSlashCommand,
     focusComposer,
     scheduleComposerFocus,
     setThreadError,
@@ -2150,17 +2159,10 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     projectModelSelection: activeProjectDefaultModelSelection,
     settings,
   });
-  const providerSendBlockReason = getAntigravitySendBlockReason(
-    selectedProviderEntry?.snapshot,
-    selectedModel,
-  );
   const sendDisabledReason =
     externalSendDisabledReason ??
     (multipleModelSelections?.length === 0 ? "Select at least one model." : null) ??
-    (activePendingProgress
-      ? attachmentBlockReason
-      : (attachmentBlockReason ??
-        (multipleModelSelections === null ? providerSendBlockReason : null)));
+    (activePendingProgress ? attachmentBlockReason : (attachmentBlockReason ?? null));
   const isSendDisabled = sendDisabledReason !== null;
   const selectedProviderStatus = useMemo(
     () => selectedProviderEntry?.snapshot ?? null,
@@ -2469,6 +2471,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       prompt,
     ],
   );
+  // A bare native command (or an answer to an active Pi question) submits
+  // without a provider selection; anything else still needs one.
+  const submissionRequiresProvider = composerSubmissionRequiresProvider(
+    composerSendState.trimmedPrompt,
+    composerImages.length > 0 ||
+      composerFiles.length > 0 ||
+      composerTerminalContexts.length > 0 ||
+      composerPreviewAnnotations.length > 0 ||
+      composerReviewComments.length > 0,
+  );
   // ------------------------------------------------------------------
   // Derived: composer trigger / menu
   // ------------------------------------------------------------------
@@ -2588,33 +2600,21 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       ];
     }
     if (composerTrigger.kind === "slash-command") {
-      const builtInSlashCommandItems = [
-        {
-          id: "slash:model",
-          type: "slash-command",
-          command: "model",
-          label: "/model",
-          description: "Switch response model for this thread",
-        },
-        ...(planModeUiEnabled
-          ? ([
-              {
-                id: "slash:plan",
-                type: "slash-command",
-                command: "plan",
-                label: "/plan",
-                description: "Switch this thread into plan mode",
-              },
-              {
-                id: "slash:default",
-                type: "slash-command",
-                command: "default",
-                label: "/default",
-                description: "Switch this thread back to normal build mode",
-              },
-            ] as const)
-          : []),
-      ] satisfies ReadonlyArray<Extract<ComposerCommandItem, { type: "slash-command" }>>;
+      const builtInSlashCommandItems = NATIVE_SLASH_COMMANDS.filter((nativeCommand) => {
+        if (
+          !planModeUiEnabled &&
+          (nativeCommand.command === "plan" || nativeCommand.command === "default")
+        ) {
+          return false;
+        }
+        return nativeCommand.command !== "compact" || compactSlashCommandAvailable;
+      }).map(({ command, description }) => ({
+        id: `slash:${command}`,
+        type: "slash-command" as const,
+        command,
+        label: `/${command}`,
+        description,
+      }));
       const slashMenuSkills = getProviderSkillsForSlashMenu(
         selectedProviderSkills,
         settings.showSkillsInSlashMenu,
@@ -2622,14 +2622,16 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       const providerSlashCommandItems = getProviderSlashCommandsForSlashMenu(
         selectedProviderSlashCommands,
         slashMenuSkills,
-      ).map((command) => ({
-        id: `provider-slash-command:${selectedProvider}:${command.name}`,
-        type: "provider-slash-command" as const,
-        provider: selectedProvider,
-        command,
-        label: `/${command.name}`,
-        description: command.description ?? command.input?.hint ?? "Run provider command",
-      }));
+      )
+        .filter((command) => !isNativeSlashCommand(command.name))
+        .map((command) => ({
+          id: `provider-slash-command:${selectedProvider}:${command.name}`,
+          type: "provider-slash-command" as const,
+          provider: selectedProvider,
+          command,
+          label: `/${command.name}`,
+          description: command.description ?? command.input?.hint ?? "Run provider command",
+        }));
       const query = composerTrigger.query.trim().toLowerCase();
       const skillItems = slashMenuSkills.map((skill) => ({
         id: `skill:${selectedProvider}:${skill.name}`,
@@ -2642,11 +2644,8 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           skill.description ??
           (skill.scope ? `${skill.scope} skill` : ""),
       }));
-      const visibleProviderSlashCommandItems = providerSlashCommandItems.filter(
-        (item) => item.command.name !== "compact" || compactSlashCommandAvailable,
-      );
       const slashCommandItems = slashCommandItemsForPromptPosition(
-        [...builtInSlashCommandItems, ...visibleProviderSlashCommandItems, ...skillItems],
+        [...builtInSlashCommandItems, ...providerSlashCommandItems, ...skillItems],
         composerTrigger.rangeStart === 0,
       );
       return searchSlashCommandItems(slashCommandItems, query);
@@ -2936,7 +2935,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     isSendBusy ||
     isSendDisabled ||
     isConnecting ||
-    noProviderAvailable ||
+    (noProviderAvailable && submissionRequiresProvider) ||
     projectSelectionRequired ||
     environmentUnavailable !== null ||
     (!composerSendState.hasSendableContent && !showResumeAction);
@@ -3898,8 +3897,11 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
           }
           return;
         }
-        if (!planModeUiEnabled) return;
-        void handleInteractionModeChange(item.command === "plan" ? "plan" : "default");
+        if (item.command === "plan" || item.command === "default") {
+          void handleInteractionModeChange(item.command);
+        } else {
+          onNativeSlashCommand?.(item.command);
+        }
         const applied = applyPromptReplacement(trigger.rangeStart, trigger.rangeEnd, "", {
           expectedText: snapshot.value.slice(trigger.rangeStart, trigger.rangeEnd),
         });
@@ -4017,7 +4019,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       applyPromptReplacement,
       composerDraftTarget,
       handleInteractionModeChange,
-      planModeUiEnabled,
+      onNativeSlashCommand,
       onUsageLimitsCommand,
       resolveActiveComposerTrigger,
     ],
@@ -4067,7 +4069,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       isSendBusy ||
       isSendDisabled ||
       isConnecting ||
-      noProviderAvailable ||
+      (noProviderAvailable && submissionRequiresProvider) ||
       environmentUnavailable !== null ||
       phase === "running"
     ) {
@@ -4089,6 +4091,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
     noProviderAvailable,
     phase,
     showPlanFollowUpPrompt,
+    submissionRequiresProvider,
   ]);
 
   const submitComposer = useCallback(
@@ -4097,7 +4100,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       dispatchMode?: ComposerDispatchMode,
       submissionIntent?: ComposerSubmissionIntent,
     ) => {
-      if (noProviderAvailable || isSendDisabled) {
+      if ((noProviderAvailable && submissionRequiresProvider) || isSendDisabled) {
         event?.preventDefault();
         return;
       }
@@ -4167,6 +4170,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       phase,
       promptRef,
       shouldBlurMobileComposerOnSubmit,
+      submissionRequiresProvider,
     ],
   );
   const handleSubmitMessage = useCallback(
@@ -6403,9 +6407,7 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
                   : selection,
               )
             : null,
-        providerAvailable:
-          multipleModelSelections !== null ||
-          (!noProviderAvailable && providerSendBlockReason === null),
+        providerAvailable: multipleModelSelections !== null || !noProviderAvailable,
         selectedProvider,
         selectedModel,
         selectedProviderModels,
@@ -6461,7 +6463,6 @@ export const ChatComposer = memo(function ChatComposer(props: ChatComposerProps)
       setMultipleModelSelections,
       routeKind,
       noProviderAvailable,
-      providerSendBlockReason,
       selectedPromptEffort,
       selectedProvider,
       selectedProviderModels,

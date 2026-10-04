@@ -2236,9 +2236,9 @@ describe("MessagesTimeline", () => {
       />,
     );
 
-    // The T3 wordmark replaces the generic tool icon for T3 MCP calls.
-    expect(markup).toContain('viewBox="15.5309 37 94.3941 56.96"');
-    expect(markup).toContain("Read a T3 thread");
+    // The Pi mark replaces the generic tool icon for piCode MCP calls.
+    expect(markup).toContain('d="M5 8h22v4h-4v14h-4V12h-6v14H9V12H5V8Z"');
+    expect(markup).toContain("Read a piCode thread");
     expect(markup).not.toContain("mcp__t3-code__t3_thread_read");
   });
 

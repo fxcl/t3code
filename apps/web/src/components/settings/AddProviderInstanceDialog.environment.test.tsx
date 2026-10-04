@@ -1,4 +1,4 @@
-import { EnvironmentId, ProviderDriverKind, type AcpRegistrySearchAgent } from "@t3tools/contracts";
+import { EnvironmentId, type ProviderInstanceId } from "@t3tools/contracts";
 import { beforeEach, describe, expect, it, vi } from "vite-plus/test";
 
 import { visitElements } from "../../test/reactElementTree";
@@ -38,27 +38,15 @@ vi.mock("../../hooks/useSettings", () => ({
 import { AddProviderInstanceDialog } from "./AddProviderInstanceDialog";
 
 const remoteEnvironmentId = EnvironmentId.make("remote-device");
-const preparedAgent: AcpRegistrySearchAgent = {
-  id: "kilo",
-  name: "Kilo Code",
-  version: "4.2.0",
-  description: "Kilo ACP agent",
-  authors: ["Kilo"],
-  license: "Apache-2.0",
-  website: null,
-  repository: null,
-  icon: "https://cdn.agentclientprotocol.com/registry/v1/latest/kilo.svg",
-  distribution: "binary",
-  integrity: "sha256",
-};
 
-function render(onOpenChange = vi.fn()) {
+function render(onOpenChange = vi.fn(), onCreated?: (instanceId: ProviderInstanceId) => void) {
   hooks.beginRender();
   return AddProviderInstanceDialog({
     open: true,
     environmentId: remoteEnvironmentId,
     environmentLabel: "Remote device",
     onOpenChange,
+    ...(onCreated === undefined ? {} : { onCreated }),
   });
 }
 
@@ -68,17 +56,27 @@ function findByChildren(tree: ReturnType<typeof render>, children: string) {
   return result!;
 }
 
-async function selectPreparedAcp() {
-  const searchStep = render();
-  const search = visitElements(
-    searchStep,
-    (element) =>
-      typeof element.type === "function" && element.type.name === "AcpRegistrySearchStep",
-  );
-  expect(search).not.toBeNull();
-  (search?.props.onPrepared as ((agent: AcpRegistrySearchAgent) => void) | undefined)?.(
-    preparedAgent,
-  );
+function findInput(tree: ReturnType<typeof render>, id: string) {
+  const result = visitElements(tree, (element) => element.props.id === id);
+  expect(result).not.toBeNull();
+  return result!.props as {
+    readonly value: string;
+    readonly onChange: (event: { target: { value: string } }) => void;
+  };
+}
+
+/** Walk to the identity step and type a label into it. */
+function renderIdentityStepWithLabel(
+  onOpenChange = vi.fn(),
+  onCreated?: (instanceId: ProviderInstanceId) => void,
+  label = "Work",
+) {
+  let tree = render(onOpenChange, onCreated);
+  (findByChildren(tree, "Next").props.onClick as () => void)();
+  tree = render(onOpenChange, onCreated);
+  findInput(tree, "add-provider-label").onChange({ target: { value: label } });
+  tree = render(onOpenChange, onCreated);
+  return tree;
 }
 
 describe("AddProviderInstanceDialog environment routing", () => {
@@ -89,51 +87,49 @@ describe("AddProviderInstanceDialog environment routing", () => {
     settingsHooks.useMutation.mockReset().mockReturnValue(settingsHooks.mutate);
   });
 
-  it("creates a provider with its default identity without typing", async () => {
-    let tree = render();
-    const group = visitElements(
-      tree,
-      (element) => element.props["aria-labelledby"] === "add-instance-driver-label",
-    );
-    (group!.props.onValueChange as (value: string) => void)("grok");
-    tree = render();
+  it("derives the instance id from the typed label and creates the instance", async () => {
+    const onOpenChange = vi.fn();
+    const onCreated = vi.fn();
+    let tree = renderIdentityStepWithLabel(onOpenChange, onCreated);
+    expect(findInput(tree, "add-provider-instance-id").value).toBe("pi_work");
     (findByChildren(tree, "Next").props.onClick as () => void)();
-    tree = render();
-    (findByChildren(tree, "Next").props.onClick as () => void)();
-    tree = render();
+    tree = render(onOpenChange, onCreated);
     (findByChildren(tree, "Add instance").props.onClick as () => void)();
     await Promise.resolve();
     expect(settingsHooks.mutate).toHaveBeenCalledWith({
       operation: "create",
-      instanceId: "grok",
-      instance: { driver: "grok", enabled: true, displayName: "Grok" },
+      instanceId: "pi_work",
+      instance: { driver: "pi", enabled: true, displayName: "Work" },
     });
+    expect(onCreated).toHaveBeenCalledWith("pi_work");
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
-  it("chooses an unused identity for another account without replacing configured instances", async () => {
+  it("blocks a duplicate instance id and accepts an explicit override", async () => {
     settingsHooks.read.mockReturnValue({
       providerInstances: {
-        codex_2: { driver: "codex", enabled: false },
+        pi_work: { driver: "pi", enabled: true },
       },
     });
-    let tree = render();
-    // Codex offers ChatGPT sign-in first; manual setup keeps the existing CLI flow.
-    (findByChildren(tree, "Configure manually").props.onClick as () => void)();
-    tree = render();
+    const onOpenChange = vi.fn();
+    let tree = renderIdentityStepWithLabel(onOpenChange);
+    expect(findInput(tree, "add-provider-instance-id").value).toBe("pi_work");
+    // Forward navigation past identity is blocked while the id collides.
     (findByChildren(tree, "Next").props.onClick as () => void)();
-    tree = render();
+    tree = render(onOpenChange);
+    expect(findInput(tree, "add-provider-label")).not.toBeNull();
+    findInput(tree, "add-provider-instance-id").onChange({
+      target: { value: "pi_work_2" },
+    });
+    tree = render(onOpenChange);
+    (findByChildren(tree, "Next").props.onClick as () => void)();
+    tree = render(onOpenChange);
     (findByChildren(tree, "Add instance").props.onClick as () => void)();
     await Promise.resolve();
-    expect(settingsHooks.mutate).toHaveBeenCalledWith({
-      operation: "create",
-      instanceId: "codex_3",
-      instance: {
-        driver: "codex",
-        enabled: true,
-        displayName: "Codex",
-        config: { setupMode: "existing" },
-      },
-    });
+    expect(settingsHooks.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({ operation: "create", instanceId: "pi_work_2" }),
+    );
+    expect(onOpenChange).toHaveBeenCalledWith(false);
   });
 
   it("reads and writes settings through the supplied environment", () => {
@@ -143,111 +139,38 @@ describe("AddProviderInstanceDialog environment routing", () => {
     expect(settingsHooks.useMutation).toHaveBeenCalledWith(remoteEnvironmentId);
   });
 
-  it("awaits an atomic create before closing and retains prepared ACP metadata", async () => {
+  it("awaits an atomic create before closing", async () => {
     const onOpenChange = vi.fn();
+    const onCreated = vi.fn();
     let resolveMutation!: (value: { readonly _tag: "Success"; readonly value: unknown }) => void;
     settingsHooks.mutate.mockReturnValueOnce(
       new Promise((resolve) => {
         resolveMutation = resolve;
       }),
     );
-    await selectPreparedAcp();
-
-    const identityStep = render(onOpenChange);
-    expect(
-      visitElements(identityStep, (element) => {
-        const content = JSON.stringify(element.props.children);
-        return content?.includes("4.2.0") === true && content.includes("binary");
-      }),
-    ).not.toBeNull();
-    (
-      findByChildren(identityStep, "Continue to sign-in").props.onClick as (() => void) | undefined
-    )?.();
-    expect(settingsHooks.mutate).toHaveBeenCalledWith({
-      operation: "create",
-      instanceId: "acpRegistry_kilo_code",
-      instance: {
-        driver: ProviderDriverKind.make("acpRegistry"),
-        enabled: true,
-        displayName: "Kilo Code",
-        config: {
-          agentId: "kilo",
-          distribution: "auto",
-          registryIconUrl: "https://cdn.agentclientprotocol.com/registry/v1/latest/kilo.svg",
-        },
-      },
-    });
+    let tree = renderIdentityStepWithLabel(onOpenChange, onCreated);
+    (findByChildren(tree, "Next").props.onClick as () => void)();
+    tree = render(onOpenChange, onCreated);
+    (findByChildren(tree, "Add instance").props.onClick as () => void)();
+    await Promise.resolve();
+    expect(settingsHooks.mutate).toHaveBeenCalledTimes(1);
     expect(onOpenChange).not.toHaveBeenCalled();
+    expect(onCreated).not.toHaveBeenCalled();
 
     resolveMutation({ _tag: "Success", value: {} });
     await Promise.resolve();
     await Promise.resolve();
-    expect(onOpenChange).not.toHaveBeenCalled();
-    const signInStep = render(onOpenChange);
-    const authentication = visitElements(
-      signInStep,
-      (element) =>
-        typeof element.type === "function" &&
-        element.type.name === "ProviderWizardAuthenticationStep",
-    );
-    expect(authentication?.props.instanceId).toBe("acpRegistry_kilo_code");
-    expect(authentication?.props.environmentId).toBe(remoteEnvironmentId);
-    expect(settingsHooks.mutate).toHaveBeenCalledTimes(1);
-    (authentication!.props.onFinish as () => void)();
+    expect(onCreated).toHaveBeenCalledWith("pi_work");
     expect(onOpenChange).toHaveBeenCalledWith(false);
-  });
-
-  it("configures a manually entered registry agent from the first provider screen", async () => {
-    let tree = render();
-    const search = visitElements(
-      tree,
-      (element) =>
-        typeof element.type === "function" && element.type.name === "AcpRegistrySearchStep",
-    );
-    (search!.props.onManualConfiguration as () => void)();
-    tree = render();
-    const configuration = visitElements(
-      tree,
-      (element) => element.props.idPrefix === "add-provider-acpRegistry-manual",
-    );
-    (configuration!.props.onChange as (value: Record<string, unknown>) => void)({
-      agentId: "devin",
-    });
-    tree = render();
-    (findByChildren(tree, "Next").props.onClick as () => void)();
-    tree = render();
-    (findByChildren(tree, "Continue to sign-in").props.onClick as () => void)();
-    await Promise.resolve();
-    await Promise.resolve();
-    expect(settingsHooks.mutate).toHaveBeenCalledWith({
-      operation: "create",
-      instanceId: "acpRegistry_custom",
-      instance: {
-        driver: "acpRegistry",
-        enabled: true,
-        config: { agentId: "devin" },
-      },
-    });
-    tree = render();
-    expect(
-      visitElements(
-        tree,
-        (element) =>
-          typeof element.type === "function" &&
-          element.type.name === "ProviderWizardAuthenticationStep",
-      ),
-    ).not.toBeNull();
   });
 
   it("keeps the dialog open when the atomic upsert fails", async () => {
     settingsHooks.mutate.mockResolvedValueOnce({ _tag: "Failure", cause: new Error("Conflict") });
     const onOpenChange = vi.fn();
-    await selectPreparedAcp();
-
-    const identityStep = render(onOpenChange);
-    (
-      findByChildren(identityStep, "Continue to sign-in").props.onClick as (() => void) | undefined
-    )?.();
+    let tree = renderIdentityStepWithLabel(onOpenChange);
+    (findByChildren(tree, "Next").props.onClick as () => void)();
+    tree = render(onOpenChange);
+    (findByChildren(tree, "Add instance").props.onClick as () => void)();
     await Promise.resolve();
     await Promise.resolve();
 

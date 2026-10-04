@@ -13,6 +13,7 @@ export interface VersionMismatch {
 }
 
 const VERSION_MISMATCH_DISMISSALS_STORAGE_KEY = "t3code:version-mismatch-dismissals:v1";
+const VERSION_MISMATCH_DISMISSAL_LIMIT = 50;
 
 // Runtime failures retain their identity until the next attempt. Dismiss only
 // that attempt, across chat remounts, without clearing the error in Settings.
@@ -172,7 +173,7 @@ export function dismissVersionMismatch(dismissalKey: string | null | undefined):
     return;
   }
   writeVersionMismatchDismissals({
-    keys: [...document.keys, dismissalKey],
+    keys: [...document.keys, dismissalKey].slice(-VERSION_MISMATCH_DISMISSAL_LIMIT),
   });
 }
 

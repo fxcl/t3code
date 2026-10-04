@@ -171,7 +171,8 @@ import { useDiffPanelStore } from "../diffPanelStore";
 import {
   type ComposerSubmissionIntent,
   collapseExpandedComposerCursor,
-  parseStandaloneComposerSlashCommand,
+  composerSubmissionRequiresProvider,
+  resolveComposerSubmissionIntent,
 } from "../composer-logic";
 import {
   derivePendingApprovals,
@@ -403,6 +404,13 @@ import {
   waitForThreadShell,
 } from "../state/entities";
 import { environmentShell } from "../state/shell";
+import {
+  isPiManagementCommand,
+  resolveNativeSlashCommandDispatch,
+  type NativeSlashCommand,
+} from "../nativeSlashCommands";
+import { PiManagementCommandDialog } from "./PiManagementCommandDialog";
+import { PiNativeCommandDialog } from "./PiNativeCommandDialog";
 import { ChatComposer, type ChatComposerHandle } from "./chat/ChatComposer";
 import { createPageScrollController, type PageScrollKey } from "./chat/pageScrollController";
 import { isTimelineScrollTarget } from "./chat/timelineScrollTarget";
@@ -509,7 +517,6 @@ import {
   reconcileMountedTerminalThreadIds,
   resolveComposerInteractionMode,
   resolveComposerProviderSelection,
-  getAntigravitySendBlockReason,
   observeProactivePanelUserChoice,
   resolveProactiveTurnDiffAction,
   resolveThreadMetadataUpdateForNextTurn,
@@ -4959,6 +4966,59 @@ export default function ChatView(props: ChatViewProps) {
       setDraftThreadContext,
     ],
   );
+  const [nativeSlashCommand, setNativeSlashCommand] = useState<NativeSlashCommand | null>(null);
+  const closeNativeSlashCommand = useCallback(() => setNativeSlashCommand(null), []);
+  const handleNativeSlashCommand = useCallback(
+    (command: NativeSlashCommand) => {
+      if (command === "model") {
+        composerRef.current?.openModelPicker();
+        return;
+      }
+      if (command === "plan" || command === "default") {
+        handleInteractionModeChange(command);
+        return;
+      }
+      if (command === "hotkeys") {
+        void navigate({ to: "/settings/keybindings" });
+        return;
+      }
+      const dispatch = resolveNativeSlashCommandDispatch(command, isLocalDraftThread);
+      if (dispatch.type === "notice") {
+        toastManager.add(stackedThreadToast({ type: "info", title: dispatch.message }));
+        return;
+      }
+      setNativeSlashCommand(dispatch.command);
+    },
+    [handleInteractionModeChange, isLocalDraftThread, navigate],
+  );
+  const handleNativeQuit = useCallback(async () => {
+    if (window.desktopBridge?.quitApp) {
+      await window.desktopBridge.quitApp();
+      return;
+    }
+    if (!activeThread) return;
+    const result = await interruptThreadTurn({
+      environmentId,
+      input: { threadId: activeThread.id },
+    });
+    if (result._tag === "Failure" && !isAtomCommandInterrupted(result)) {
+      const error = squashAtomCommandFailure(result);
+      throw error instanceof Error ? error : new Error("Failed to stop the session.");
+    }
+  }, [activeThread, environmentId, interruptThreadTurn]);
+  const restoreComposerEditorText = useCallback(
+    (text: string) => {
+      promptRef.current = text;
+      setComposerDraftPrompt(composerDraftTarget, text);
+      composerRef.current?.resetCursorState({
+        cursor: collapseExpandedComposerCursor(text, text.length),
+        prompt: text,
+        detectTrigger: true,
+      });
+      scheduleComposerFocus();
+    },
+    [composerDraftTarget, composerRef, scheduleComposerFocus, setComposerDraftPrompt],
+  );
   const toggleInteractionMode = useCallback(() => {
     if (!interactionModeEnabled) return;
     handleInteractionModeChange(interactionMode === "plan" ? "default" : "plan");
@@ -8411,6 +8471,28 @@ export default function ChatView(props: ChatViewProps) {
 
       return;
     }
+    const hasAttachedContext =
+      composerImages.length > 0 ||
+      composerFiles.length > 0 ||
+      sendableComposerTerminalContexts.length > 0 ||
+      composerPreviewAnnotations.length > 0 ||
+      composerReviewComments.length > 0 ||
+      composerThreadContexts.length > 0;
+    const submissionResolution = resolveComposerSubmissionIntent(
+      trimmed,
+      showPlanFollowUpPrompt && activeProposedPlan !== null,
+    );
+    if (
+      submissionResolution.type === "native-command" &&
+      multipleModelSelections === null &&
+      !composerSubmissionRequiresProvider(trimmed, hasAttachedContext)
+    ) {
+      handleNativeSlashCommand(submissionResolution.command);
+      promptRef.current = "";
+      clearComposerDraftContent(composerDraftTarget);
+      composerRef.current?.resetCursorState();
+      return;
+    }
     if (
       !directAnnotation &&
       sendInteractionModeEnabled &&
@@ -8477,24 +8559,6 @@ export default function ChatView(props: ChatViewProps) {
           resetCursor: (options) => composerRef.current?.resetCursorState(options),
         });
       }
-      return;
-    }
-    // Providers without the legacy toggle receive their native commands unchanged.
-    const standaloneSlashCommand =
-      sendInteractionModeEnabled &&
-      composerImages.length === 0 &&
-      composerFiles.length === 0 &&
-      sendableComposerTerminalContexts.length === 0 &&
-      composerPreviewAnnotations.length === 0 &&
-      composerReviewComments.length === 0 &&
-      composerThreadContexts.length === 0
-        ? parseStandaloneComposerSlashCommand(trimmed)
-        : null;
-    if (standaloneSlashCommand && multipleModelSelections === null) {
-      handleInteractionModeChange(standaloneSlashCommand);
-      promptRef.current = "";
-      clearComposerDraftContent(composerDraftTarget);
-      composerRef.current?.resetCursorState();
       return;
     }
     if (!hasSendableContent) {
@@ -8609,11 +8673,6 @@ export default function ChatView(props: ChatViewProps) {
       );
       if (!provider?.enabled || !provider.isAvailable || provider.status !== "ready") {
         setThreadError(threadIdForSend, `Provider for ${selection.model} is unavailable.`);
-        return;
-      }
-      const providerBlockReason = getAntigravitySendBlockReason(provider.snapshot, selection.model);
-      if (providerBlockReason) {
-        setThreadError(threadIdForSend, providerBlockReason);
         return;
       }
       const providerState = getComposerProviderState({
@@ -10968,6 +11027,7 @@ export default function ChatView(props: ChatViewProps) {
                               toggleInteractionMode={toggleInteractionMode}
                               handleRuntimeModeChange={handleRuntimeModeChange}
                               handleInteractionModeChange={handleInteractionModeChange}
+                              onNativeSlashCommand={handleNativeSlashCommand}
                               focusComposer={focusComposer}
                               scheduleComposerFocus={scheduleComposerFocus}
                               setThreadError={setThreadError}
@@ -11272,6 +11332,27 @@ export default function ChatView(props: ChatViewProps) {
         </AlertDialogPopup>
       </AlertDialog>
       <LinkPullRequestDialogHost />
+      {activeThread && nativeSlashCommand ? (
+        isPiManagementCommand(nativeSlashCommand) ? (
+          <PiManagementCommandDialog
+            command={nativeSlashCommand}
+            environmentId={environmentId}
+            threadId={activeThread.id}
+            onClose={closeNativeSlashCommand}
+            onRestoreEditorText={restoreComposerEditorText}
+          />
+        ) : (
+          <PiNativeCommandDialog
+            command={nativeSlashCommand}
+            environmentId={environmentId}
+            threadId={activeThread.id}
+            onClose={closeNativeSlashCommand}
+            onNewThread={handleNewThreadInActiveProject}
+            onQuit={handleNativeQuit}
+            onRestoreEditorText={restoreComposerEditorText}
+          />
+        )
+      ) : null}
       {expandedImage && (
         <ExpandedImageDialog
           key={expandedImageKey(expandedImage)}

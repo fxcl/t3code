@@ -13,7 +13,7 @@ import {
 } from "./providerInstances";
 
 function provider(input: {
-  provider: ProviderDriverKind;
+  provider?: ProviderDriverKind;
   instanceId: string;
   enabled?: boolean;
   availability?: ServerProvider["availability"];
@@ -25,7 +25,7 @@ function provider(input: {
 }): ServerProvider {
   return {
     instanceId: ProviderInstanceId.make(input.instanceId),
-    driver: input.provider,
+    driver: input.provider ?? ProviderDriverKind.make("pi"),
     ...(input.supportsTextGeneration === undefined
       ? {}
       : { supportsTextGeneration: input.supportsTextGeneration }),
@@ -55,11 +55,7 @@ const model = (slug: string, isCustom = false, isDefault = false) => ({
 describe("isProviderInstancePickerReady", () => {
   it("rejects a disabled instance even while its last probe status is ready", () => {
     const [entry] = deriveProviderInstanceEntries([
-      provider({
-        provider: ProviderDriverKind.make("codex"),
-        instanceId: "codex",
-        enabled: false,
-      }),
+      provider({ instanceId: "pi", enabled: false }),
     ]);
 
     expect(entry?.status).toBe("ready");
@@ -67,18 +63,14 @@ describe("isProviderInstancePickerReady", () => {
   });
 
   it("accepts an enabled, available, ready instance", () => {
-    const [entry] = deriveProviderInstanceEntries([
-      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex" }),
-    ]);
+    const [entry] = deriveProviderInstanceEntries([provider({ instanceId: "pi" })]);
 
     expect(entry && isProviderInstancePickerReady(entry)).toBe(true);
   });
 });
 
 describe("resolveProviderCatalogAvailability", () => {
-  const [entry] = deriveProviderInstanceEntries([
-    provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex" }),
-  ]);
+  const [entry] = deriveProviderInstanceEntries([provider({ instanceId: "pi" })]);
 
   it("keeps the initial reactive config state distinct from an empty catalogue", () => {
     expect(
@@ -118,12 +110,8 @@ describe("resolveProviderCatalogAvailability", () => {
 describe("isProviderInstancePickerVisible", () => {
   it("keeps enabled instances in the rail and removes disabled instances", () => {
     const [enabledEntry, disabledEntry] = deriveProviderInstanceEntries([
-      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex" }),
-      provider({
-        provider: ProviderDriverKind.make("claudeAgent"),
-        instanceId: "claudeAgent",
-        enabled: false,
-      }),
+      provider({ instanceId: "pi" }),
+      provider({ instanceId: "pi_work", enabled: false }),
     ]);
 
     expect(enabledEntry && isProviderInstancePickerVisible(enabledEntry)).toBe(true);
@@ -133,13 +121,11 @@ describe("isProviderInstancePickerVisible", () => {
 
 describe("applyProviderInstanceSettings", () => {
   it("uses settings when a streamed snapshot still reports a disabled default as enabled", () => {
-    const entries = deriveProviderInstanceEntries([
-      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex" }),
-    ]);
+    const entries = deriveProviderInstanceEntries([provider({ instanceId: "pi" })]);
     const [entry] = applyProviderInstanceSettings(entries, {
       providerInstances: {
-        [ProviderInstanceId.make("codex")]: {
-          driver: ProviderDriverKind.make("codex"),
+        [ProviderInstanceId.make("pi")]: {
+          driver: ProviderDriverKind.make("pi"),
           enabled: false,
         },
       },
@@ -151,10 +137,7 @@ describe("applyProviderInstanceSettings", () => {
 
   it("treats a removed custom instance snapshot as disabled", () => {
     const entries = deriveProviderInstanceEntries([
-      provider({
-        provider: ProviderDriverKind.make("claudeAgent"),
-        instanceId: "claude_work",
-      }),
+      provider({ instanceId: "pi_work" }),
     ]);
     const [entry] = applyProviderInstanceSettings(entries, {
       providerInstances: {},
@@ -167,12 +150,7 @@ describe("applyProviderInstanceSettings", () => {
   it.each(["constructor", "toString"])(
     "treats a removed custom instance named %s as disabled",
     (instanceId) => {
-      const entries = deriveProviderInstanceEntries([
-        provider({
-          provider: ProviderDriverKind.make("claudeAgent"),
-          instanceId,
-        }),
-      ]);
+      const entries = deriveProviderInstanceEntries([provider({ instanceId })]);
       const [entry] = applyProviderInstanceSettings(entries, {
         providerInstances: {},
         providers: {} as never,
@@ -184,16 +162,11 @@ describe("applyProviderInstanceSettings", () => {
 
   it("uses settings for a configured custom instance named constructor", () => {
     const instanceId = ProviderInstanceId.make("constructor");
-    const entries = deriveProviderInstanceEntries([
-      provider({
-        provider: ProviderDriverKind.make("claudeAgent"),
-        instanceId,
-      }),
-    ]);
+    const entries = deriveProviderInstanceEntries([provider({ instanceId })]);
     const [entry] = applyProviderInstanceSettings(entries, {
       providerInstances: {
         [instanceId]: {
-          driver: ProviderDriverKind.make("claudeAgent"),
+          driver: ProviderDriverKind.make("pi"),
           enabled: false,
         },
       },
@@ -206,10 +179,7 @@ describe("applyProviderInstanceSettings", () => {
   it("treats a removed default instance for a fork driver as disabled", () => {
     const driver = ProviderDriverKind.make("constructor");
     const entries = deriveProviderInstanceEntries([
-      provider({
-        provider: driver,
-        instanceId: "constructor",
-      }),
+      provider({ provider: driver, instanceId: "constructor" }),
     ]);
     const [entry] = applyProviderInstanceSettings(entries, {
       providerInstances: {},
@@ -221,15 +191,10 @@ describe("applyProviderInstanceSettings", () => {
   });
 
   it("uses legacy settings for a built-in default instance", () => {
-    const entries = deriveProviderInstanceEntries([
-      provider({
-        provider: ProviderDriverKind.make("codex"),
-        instanceId: "codex",
-      }),
-    ]);
+    const entries = deriveProviderInstanceEntries([provider({ instanceId: "pi" })]);
     const [entry] = applyProviderInstanceSettings(entries, {
       providerInstances: {},
-      providers: { codex: { enabled: false } } as never,
+      providers: { pi: { enabled: false } } as never,
     });
 
     expect(entry?.enabled).toBe(false);
@@ -238,59 +203,24 @@ describe("applyProviderInstanceSettings", () => {
 
 describe("deriveProviderInstanceEntries", () => {
   it("uses explicit instance id and driver kind from the snapshot", () => {
-    const snapshot = provider({
-      provider: ProviderDriverKind.make("codex"),
-      instanceId: "codex_personal",
-    });
+    const snapshot = provider({ instanceId: "pi_personal" });
     const [entry] = deriveProviderInstanceEntries([snapshot]);
 
-    expect(entry?.instanceId).toBe("codex_personal");
-    expect(entry?.driverKind).toBe("codex");
+    expect(entry?.instanceId).toBe("pi_personal");
+    expect(entry?.driverKind).toBe("pi");
     expect(entry?.isDefault).toBe(false);
   });
 });
 
 describe("deriveProviderEntriesByEnvironment", () => {
-  it("resolves registry branding from each environment's settings", () => {
-    const instanceId = "custom-acp";
-    const snapshot = provider({ provider: ProviderDriverKind.make("acpRegistry"), instanceId });
-    const byEnvironment = deriveProviderEntriesByEnvironment(
-      ["devin", "other-agent"].map(
-        (agentId) =>
-          [
-            agentId,
-            [snapshot],
-            {
-              providers: {} as never,
-              providerInstances: {
-                [instanceId]: {
-                  driver: ProviderDriverKind.make("acpRegistry"),
-                  enabled: true,
-                  config: { agentId, registryIconUrl: `https://example.com/${agentId}.svg` },
-                },
-              },
-            },
-          ] as const,
-      ),
-    );
-    expect(byEnvironment.get("devin")?.get(instanceId)?.acpRegistryAgentId).toBe("devin");
-    expect(byEnvironment.get("devin")?.get(instanceId)?.acpRegistryIconUrl).toBe(
-      "https://example.com/devin.svg",
-    );
-    expect(byEnvironment.get("other-agent")?.get(instanceId)?.acpRegistryAgentId).toBe(
-      "other-agent",
-    );
-  });
-
   it("keeps same-id default instances distinct per environment", () => {
     const byEnvironment = deriveProviderEntriesByEnvironment([
       [
         "local",
         [
           provider({
-            provider: ProviderDriverKind.make("claude"),
-            instanceId: "claude",
-            displayName: "Claude Local",
+            instanceId: "pi",
+            displayName: "Pi Local",
             accentColor: "#112233",
           }),
         ],
@@ -299,28 +229,27 @@ describe("deriveProviderEntriesByEnvironment", () => {
         "remote",
         [
           provider({
-            provider: ProviderDriverKind.make("claude"),
-            instanceId: "claude",
-            displayName: "Claude Remote",
+            instanceId: "pi",
+            displayName: "Pi Remote",
             accentColor: "#445566",
           }),
         ],
       ],
     ]);
 
-    expect(byEnvironment.get("local")?.get("claude")?.displayName).toBe("Claude Local");
-    expect(byEnvironment.get("local")?.get("claude")?.accentColor).toBe("#112233");
-    expect(byEnvironment.get("remote")?.get("claude")?.displayName).toBe("Claude Remote");
-    expect(byEnvironment.get("remote")?.get("claude")?.accentColor).toBe("#445566");
+    expect(byEnvironment.get("local")?.get("pi")?.displayName).toBe("Pi Local");
+    expect(byEnvironment.get("local")?.get("pi")?.accentColor).toBe("#112233");
+    expect(byEnvironment.get("remote")?.get("pi")?.displayName).toBe("Pi Remote");
+    expect(byEnvironment.get("remote")?.get("pi")?.accentColor).toBe("#445566");
   });
 
   it("never falls back to another environment's instances", () => {
     const byEnvironment = deriveProviderEntriesByEnvironment([
-      ["local", [provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex" })]],
+      ["local", [provider({ instanceId: "pi" })]],
       ["empty", []],
     ]);
 
-    expect(byEnvironment.get("empty")?.get("codex")).toBeUndefined();
+    expect(byEnvironment.get("empty")?.get("pi")).toBeUndefined();
     // Every environment gets its own bucket, so an absent lookup is a real
     // "this environment has no such instance", not a missing key.
     expect(byEnvironment.get("empty")?.size).toBe(0);
@@ -329,106 +258,72 @@ describe("deriveProviderEntriesByEnvironment", () => {
 
 describe("resolveSelectableProviderInstance", () => {
   it("returns the requested instance when it is enabled and available", () => {
-    const requested = ProviderInstanceId.make("claude_work");
+    const requested = ProviderInstanceId.make("pi_work");
     const providers = [
-      provider({ provider: ProviderDriverKind.make("codex"), instanceId: "codex" }),
-      provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: requested }),
+      provider({ instanceId: "pi" }),
+      provider({ instanceId: requested }),
     ];
 
     expect(resolveSelectableProviderInstance(providers, requested)).toBe(requested);
   });
 
   it("falls back to the first enabled and available instance", () => {
-    const disabled = ProviderInstanceId.make("codex");
-    const fallback = ProviderInstanceId.make("claudeAgent");
+    const disabled = ProviderInstanceId.make("pi_work");
+    const fallback = ProviderInstanceId.make("pi_default");
     const providers = [
-      provider({
-        provider: ProviderDriverKind.make("codex"),
-        instanceId: disabled,
-        enabled: false,
-      }),
-      provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: fallback }),
+      provider({ instanceId: disabled, enabled: false }),
+      provider({ instanceId: fallback }),
     ];
 
     expect(resolveSelectableProviderInstance(providers, disabled)).toBe(fallback);
   });
 
   it("prefers a ready instance over an enabled one whose driver cannot start", () => {
-    const notInstalled = ProviderInstanceId.make("codex");
-    const ready = ProviderInstanceId.make("claudeAgent");
+    const notInstalled = ProviderInstanceId.make("pi_broken");
+    const ready = ProviderInstanceId.make("pi_ready");
     const providers = [
-      provider({
-        provider: ProviderDriverKind.make("codex"),
-        instanceId: notInstalled,
-        status: "error",
-      }),
-      provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: ready }),
+      provider({ instanceId: notInstalled, status: "error" }),
+      provider({ instanceId: ready }),
     ];
 
     expect(resolveSelectableProviderInstance(providers, undefined)).toBe(ready);
   });
 
   it("prefers an unprobed (warning) instance over one whose probe errored", () => {
-    const notInstalled = ProviderInstanceId.make("codex");
-    const unprobed = ProviderInstanceId.make("claudeAgent");
+    const errored = ProviderInstanceId.make("pi_broken");
+    const unprobed = ProviderInstanceId.make("pi_pending");
     const providers = [
-      provider({
-        provider: ProviderDriverKind.make("codex"),
-        instanceId: notInstalled,
-        status: "error",
-      }),
-      provider({
-        provider: ProviderDriverKind.make("claudeAgent"),
-        instanceId: unprobed,
-        status: "warning",
-      }),
+      provider({ instanceId: errored, status: "error" }),
+      provider({ instanceId: unprobed, status: "warning" }),
     ];
 
     expect(resolveSelectableProviderInstance(providers, undefined)).toBe(unprobed);
   });
 
   it("keeps a requested instance even when its probe errored", () => {
-    const requested = ProviderInstanceId.make("codex");
+    const requested = ProviderInstanceId.make("pi_broken");
     const providers = [
-      provider({
-        provider: ProviderDriverKind.make("codex"),
-        instanceId: requested,
-        status: "error",
-      }),
-      provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: "claudeAgent" }),
+      provider({ instanceId: requested, status: "error" }),
+      provider({ instanceId: "pi_ready" }),
     ];
 
     expect(resolveSelectableProviderInstance(providers, requested)).toBe(requested);
   });
 
   it("does not invent an errored instance as a new-user default", () => {
-    const notInstalled = ProviderInstanceId.make("codex");
-    const providers = [
-      provider({
-        provider: ProviderDriverKind.make("codex"),
-        instanceId: notInstalled,
-        status: "error",
-      }),
-    ];
+    const notInstalled = ProviderInstanceId.make("pi_broken");
+    const providers = [provider({ instanceId: notInstalled, status: "error" })];
 
     expect(resolveSelectableProviderInstance(providers, undefined)).toBeUndefined();
   });
 
   it("does not return disabled, unavailable, or unknown instances when none are sendable", () => {
-    const disabled = ProviderInstanceId.make("codex");
-    const unavailable = ProviderInstanceId.make("claudeAgent");
+    const disabled = ProviderInstanceId.make("pi_disabled");
+    const unavailable = ProviderInstanceId.make("pi_unavailable");
     const unknown = ProviderInstanceId.make("removed_instance");
     const providers = [
-      provider({
-        provider: ProviderDriverKind.make("codex"),
-        instanceId: disabled,
-        enabled: false,
-      }),
-      provider({
-        provider: ProviderDriverKind.make("claudeAgent"),
-        instanceId: unavailable,
-        availability: "unavailable",
-      }),
+      provider({ instanceId: disabled, enabled: false }),
+      provider({ instanceId: unavailable, availability: "unavailable" }),
     ];
 
     expect(resolveSelectableProviderInstance(providers, disabled)).toBeUndefined();
@@ -441,31 +336,24 @@ describe("getDefaultProviderInstanceModel", () => {
   it("uses the instance's own models, not the default instance of the kind", () => {
     const providers = [
       provider({
-        provider: ProviderDriverKind.make("claudeAgent"),
-        instanceId: "claude_openrouter",
+        instanceId: "pi_openrouter",
         models: [model("openai/gpt-5.5", true), model("claude-opus-4-8")],
       }),
       provider({
-        provider: ProviderDriverKind.make("claudeAgent"),
-        instanceId: "claudeAgent",
-        models: [model("claude-sonnet-5")],
+        instanceId: "pi",
+        models: [model("pi-sonic")],
       }),
     ];
 
     expect(
-      getDefaultProviderInstanceModel(providers, ProviderInstanceId.make("claude_openrouter")),
+      getDefaultProviderInstanceModel(providers, ProviderInstanceId.make("pi_openrouter")),
     ).toBe("claude-opus-4-8");
   });
 
   it("falls back to the driver default when the instance reports no models", () => {
-    const providers = [
-      provider({ provider: ProviderDriverKind.make("claudeAgent"), instanceId: "claudeAgent" }),
-    ];
+    const providers = [provider({ instanceId: "pi" })];
 
-    const resolved = getDefaultProviderInstanceModel(
-      providers,
-      ProviderInstanceId.make("claudeAgent"),
-    );
+    const resolved = getDefaultProviderInstanceModel(providers, ProviderInstanceId.make("pi"));
     expect(typeof resolved).toBe("string");
     expect(resolved?.length).toBeGreaterThan(0);
   });
@@ -473,14 +361,13 @@ describe("getDefaultProviderInstanceModel", () => {
   it("honors the instance's declared default before model-list order", () => {
     const providers = [
       provider({
-        provider: ProviderDriverKind.make("claudeAgent"),
-        instanceId: "claudeAgent",
-        models: [model("claude-sonnet-5"), model("claude-opus-4-8", false, true)],
+        instanceId: "pi",
+        models: [model("pi-sonic"), model("pi-opus-sol", false, true)],
       }),
     ];
 
-    expect(getDefaultProviderInstanceModel(providers, ProviderInstanceId.make("claudeAgent"))).toBe(
-      "claude-opus-4-8",
+    expect(getDefaultProviderInstanceModel(providers, ProviderInstanceId.make("pi"))).toBe(
+      "pi-opus-sol",
     );
   });
 
@@ -492,36 +379,30 @@ describe("getDefaultProviderInstanceModel", () => {
 });
 
 describe("resolveDefaultProviderModelSelection", () => {
-  it.each([
-    ["codex", "codex", "gpt-5.6"],
-    ["claudeAgent", "claudeAgent", "claude-fable-5"],
-    ["cursor", "cursor", "composer-2"],
-  ])("uses the only available %s instance", (driver, instanceId, modelSlug) => {
+  it("uses the only available instance and its declared default model", () => {
     const providers = [
       provider({
-        provider: ProviderDriverKind.make(driver),
-        instanceId,
-        models: [model(modelSlug, false, true)],
+        instanceId: "pi",
+        models: [model("pi-sonic", false, true)],
       }),
     ];
 
     expect(resolveDefaultProviderModelSelection(providers, null)).toEqual({
-      instanceId,
-      model: modelSlug,
+      instanceId: "pi",
+      model: "pi-sonic",
     });
   });
 
   it("preserves a valid stored selection including its options", () => {
     const providers = [
       provider({
-        provider: ProviderDriverKind.make("claudeAgent"),
-        instanceId: "claudeAgent",
-        models: [model("claude-opus-4-8")],
+        instanceId: "pi",
+        models: [model("pi-sonic")],
       }),
     ];
     const stored = {
-      instanceId: ProviderInstanceId.make("claudeAgent"),
-      model: "custom-model",
+      instanceId: ProviderInstanceId.make("pi"),
+      model: "pi-test-custom-model",
       options: [{ id: "effort", value: "high" }],
     };
 
@@ -531,24 +412,22 @@ describe("resolveDefaultProviderModelSelection", () => {
   it("replaces a stale stored instance with the first ready instance and its model", () => {
     const providers = [
       provider({
-        provider: ProviderDriverKind.make("codex"),
-        instanceId: "codex",
+        instanceId: "pi_stale",
         status: "warning",
-        models: [model("gpt-5.6")],
+        models: [model("pi-sonic")],
       }),
       provider({
-        provider: ProviderDriverKind.make("claudeAgent"),
-        instanceId: "claudeAgent",
-        models: [model("claude-opus-4-8", false, true)],
+        instanceId: "pi",
+        models: [model("pi-opus-sol", false, true)],
       }),
     ];
 
     expect(
       resolveDefaultProviderModelSelection(providers, {
-        instanceId: ProviderInstanceId.make("removed-provider"),
+        instanceId: ProviderInstanceId.make("removed-instance"),
         model: "stale-model",
       }),
-    ).toEqual({ instanceId: "claudeAgent", model: "claude-opus-4-8" });
+    ).toEqual({ instanceId: "pi", model: "pi-opus-sol" });
   });
 
   it.each([{ enabled: false }, { availability: "unavailable" as const }])(
@@ -556,24 +435,22 @@ describe("resolveDefaultProviderModelSelection", () => {
     (requestedState) => {
       const providers = [
         provider({
-          provider: ProviderDriverKind.make("codex"),
-          instanceId: "codex",
-          models: [model("gpt-5.6")],
+          instanceId: "pi_unusable",
+          models: [model("pi-sonic")],
           ...requestedState,
         }),
         provider({
-          provider: ProviderDriverKind.make("claudeAgent"),
-          instanceId: "claudeAgent",
-          models: [model("claude-opus-4-8", false, true)],
+          instanceId: "pi",
+          models: [model("pi-opus-sol", false, true)],
         }),
       ];
 
       expect(
         resolveDefaultProviderModelSelection(providers, {
-          instanceId: ProviderInstanceId.make("codex"),
-          model: "gpt-5.6",
+          instanceId: ProviderInstanceId.make("pi_unusable"),
+          model: "pi-sonic",
         }),
-      ).toEqual({ instanceId: "claudeAgent", model: "claude-opus-4-8" });
+      ).toEqual({ instanceId: "pi", model: "pi-opus-sol" });
     },
   );
 
@@ -581,53 +458,21 @@ describe("resolveDefaultProviderModelSelection", () => {
     expect(resolveDefaultProviderModelSelection([], null)).toBeNull();
     expect(
       resolveDefaultProviderModelSelection(
-        [
-          provider({
-            provider: ProviderDriverKind.make("codex"),
-            instanceId: "codex",
-            enabled: false,
-          }),
-        ],
+        [provider({ instanceId: "pi", enabled: false })],
         null,
       ),
     ).toBeNull();
     expect(
       resolveDefaultProviderModelSelection(
-        [
-          provider({
-            provider: ProviderDriverKind.make("codex"),
-            instanceId: "codex",
-            availability: "unavailable",
-          }),
-        ],
+        [provider({ instanceId: "pi", availability: "unavailable" })],
         null,
       ),
     ).toBeNull();
     expect(
       resolveDefaultProviderModelSelection(
-        [
-          provider({
-            provider: ProviderDriverKind.make("codex"),
-            instanceId: "codex",
-            status: "error",
-          }),
-        ],
+        [provider({ instanceId: "pi", status: "error" })],
         null,
       ),
     ).toBeNull();
-  });
-});
-
-describe("provider icon metadata", () => {
-  it("retains server-published registry icons without local settings", () => {
-    const iconUrl = "https://cdn.agentclientprotocol.com/registry/icons/swe-agent.svg";
-    const [entry] = deriveProviderInstanceEntries([
-      {
-        ...provider({ provider: ProviderDriverKind.make("acpRegistry"), instanceId: "swe-remote" }),
-        iconUrl,
-      },
-    ]);
-    expect(entry?.acpRegistryIconUrl).toBe(iconUrl);
-    expect(entry?.driverKind).toBe("acpRegistry");
   });
 });
