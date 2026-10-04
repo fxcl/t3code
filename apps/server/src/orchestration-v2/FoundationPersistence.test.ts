@@ -42,7 +42,7 @@ import * as Statement from "effect/unstable/sql/Statement";
 
 import { LIVE_STREAM_MAX_ITEMS, LiveStreamBufferError } from "./LiveStreamBudget.ts";
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
-import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { PiProviderCapabilitiesV2 } from "./Adapters/PiAdapterV2.ts";
 import * as CommandReceiptStore from "./CommandReceiptStore.ts";
 import * as EffectOutbox from "./EffectOutbox.ts";
 import * as EffectWorker from "./EffectWorker.ts";
@@ -725,7 +725,7 @@ it.layer(TestLayer)("orchestration V2 foundation persistence", (it) => {
         status: "ready" as const,
         cwd: "/workspace/first",
         model: modelSelection.model,
-        capabilities: CodexProviderCapabilitiesV2,
+        capabilities: PiProviderCapabilitiesV2,
         createdAt: now,
         updatedAt: now,
         lastError: null,

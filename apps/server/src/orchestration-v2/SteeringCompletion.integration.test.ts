@@ -19,7 +19,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as Queue from "effect/Queue";
 import * as Stream from "effect/Stream";
-import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { PiProviderCapabilitiesV2 } from "./Adapters/PiAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -69,9 +69,9 @@ it.effect.each(
       const rejectSteer = yield* Deferred.make<void>();
       let steerCalls = 0;
       const capabilities = {
-        ...CodexProviderCapabilitiesV2,
+        ...PiProviderCapabilitiesV2,
         turns: {
-          ...CodexProviderCapabilitiesV2.turns,
+          ...PiProviderCapabilitiesV2.turns,
           supportsActiveSteering: timing !== "without native steering",
         },
       };
@@ -423,9 +423,9 @@ const nextTurnSelectionHarness = Effect.fn("nextTurnSelectionHarness")(function*
   const started: ProviderAdapterV2TurnInput[] = [];
   const steered: string[] = [];
   const capabilities = {
-    ...CodexProviderCapabilitiesV2,
+    ...PiProviderCapabilitiesV2,
     turns: {
-      ...CodexProviderCapabilitiesV2.turns,
+      ...PiProviderCapabilitiesV2.turns,
       supportsActiveSteering: true,
       supportsSteeringByInterruptRestart: false,
     },

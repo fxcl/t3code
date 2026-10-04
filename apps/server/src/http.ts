@@ -92,6 +92,8 @@ export function assetResponseHeaders(
     readonly download?: boolean;
     readonly fileName?: string;
     readonly mimeType?: string;
+    /** Pi HTML exports: force an attachment download that keeps this name. */
+    readonly downloadName?: string;
   },
 ): Record<string, string> {
   const lowerPath = filePath.toLowerCase();
@@ -99,6 +101,11 @@ export function assetResponseHeaders(
   return {
     "Cache-Control": "private, max-age=3600",
     "X-Content-Type-Options": "nosniff",
+    // Only ever set for Pi export artifacts, whose signed handle exists for a
+    // single download; everything else serves inline.
+    ...(options?.downloadName !== undefined
+      ? { "Content-Disposition": downloadContentDisposition(options.downloadName) }
+      : {}),
     ...(options?.download
       ? {
           "Content-Disposition": downloadContentDisposition(options.fileName),
@@ -161,6 +168,7 @@ export const assetFileResponse = Effect.fn("assetFileResponse")(function* (
     readonly download?: boolean;
     readonly fileName?: string;
     readonly mimeType?: string;
+    readonly downloadName?: string;
     readonly file?: OpenMediaFile;
   },
   rangeHeader?: string,

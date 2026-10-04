@@ -43,6 +43,7 @@ import type {
   ProviderSelectionTransitionInput,
   ProviderSelectionTransitionPlan,
 } from "./ProviderSelectionTransition.ts";
+import type { PiNativeAdapterShape } from "../provider/Services/PiNativeAdapter.ts";
 
 export const ProviderAdapterV2RuntimePolicy = Schema.Struct({
   runtimeMode: RuntimeMode,
@@ -576,6 +577,12 @@ export interface ProviderAdapterV2SessionRuntime {
   readonly forkThread: (
     input: ProviderAdapterV2ForkThreadInput,
   ) => Effect.Effect<OrchestrationV2ProviderThread, ProviderAdapterV2Error>;
+  /**
+   * Pi-native per-thread operation set (tree navigation, session management,
+   * settings, auth, sharing). Only the Pi adapter exposes it; the wire layer
+   * refuses `piNative.*` calls against every other provider.
+   */
+  readonly piNative?: PiNativeAdapterShape<ProviderAdapterV2Error>;
 }
 
 export interface ProviderAdapterV2Shape {

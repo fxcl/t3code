@@ -22,7 +22,7 @@ import * as SubscriptionRef from "effect/SubscriptionRef";
 
 import * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts";
 import * as ProviderSessionManager from "../../orchestration-v2/ProviderSessionManager.ts";
-import { AcpProviderCapabilitiesV2 } from "../../orchestration-v2/Adapters/AcpAdapterV2.ts";
+import { PiProviderCapabilitiesV2 } from "../../orchestration-v2/Adapters/PiAdapterV2.ts";
 import type { ProviderInstance } from "../ProviderDriver.ts";
 import type { ProviderAuthController } from "../Services/ProviderAuthService.ts";
 import * as ProviderInstanceRegistry from "../Services/ProviderInstanceRegistry.ts";
@@ -110,7 +110,7 @@ function makeSession(
     status,
     cwd: "/workspace",
     model: null,
-    capabilities: AcpProviderCapabilitiesV2,
+    capabilities: PiProviderCapabilitiesV2,
     createdAt: nowUtc,
     updatedAt: nowUtc,
     lastError: null,

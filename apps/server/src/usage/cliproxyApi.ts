@@ -4,18 +4,235 @@ import {
   ProviderDriverKind,
   UsageLimitSourceError,
   type ProviderConsumeResetCreditResult,
+  type ServerProviderUsageLimits,
+  type ServerProviderUsageWindow,
   type UsageLimitSourceAccount,
   type UsageLimitSourceConfig,
 } from "@t3tools/contracts";
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 import { HttpClient, HttpClientRequest, HttpClientResponse } from "effect/unstable/http";
 
-import { codexPlanLabel } from "../provider/Layers/CodexProvider.ts";
-import { codexRateLimitsToLimits } from "../provider/Layers/codexUsageLimits.ts";
-import { claudeUsageResponseToLimits } from "../provider/Layers/claudeUsageLimits.ts";
-import { makeUnavailableUsageLimits } from "../provider/providerUsageLimits.ts";
+import {
+  clampPercent,
+  makeUnavailableUsageLimits,
+  makeUsageLimits,
+} from "../provider/providerUsageLimits.ts";
+
+// ---------------------------------------------------------------------------
+// Codex / Claude usage-limit mapping, inlined from the provider layers that the
+// Pi-only build removed (`CodexProvider.ts`, `codexUsageLimits.ts`,
+// `claudeUsageLimits.ts`). The CLIProxyAPI hub still proxies both providers'
+// subscription endpoints, so the mapping survives here, driver-independent.
+// Window ids match the ones the old drivers emitted.
+// ---------------------------------------------------------------------------
+
+const SESSION_MINS = 5 * 60;
+const WEEK_MINS = 7 * 24 * 60;
+const MONTH_MINS = 30 * 24 * 60;
+
+function isoFromEpochSeconds(value: number | null | undefined): string | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) return undefined;
+  const dt = DateTime.make(value * 1000);
+  return Option.isSome(dt) ? DateTime.formatIso(dt.value) : undefined;
+}
+
+function isoFromString(value: string | null | undefined): string | undefined {
+  if (!value) return undefined;
+  const dt = DateTime.make(value);
+  return Option.isSome(dt) ? DateTime.formatIso(dt.value) : undefined;
+}
+
+function kindForDuration(mins: number): ServerProviderUsageWindow["kind"] {
+  if (mins >= MONTH_MINS) return "monthly";
+  if (mins >= WEEK_MINS) return "weekly";
+  return "session";
+}
+
+function labelForKind(kind: ServerProviderUsageWindow["kind"]): string {
+  return kind === "session" ? "Session" : kind === "weekly" ? "Weekly" : "Monthly";
+}
+
+interface CodexRateLimitWindow {
+  readonly usedPercent: number;
+  readonly resetsAt?: number | null;
+  readonly windowDurationMins?: number | null;
+}
+
+interface CodexRateLimitSnapshot {
+  readonly planType?: string | null;
+  readonly primary?: CodexRateLimitWindow | null;
+  readonly secondary?: CodexRateLimitWindow | null;
+}
+
+/** Shared with the hub's plan display, which reports the same `planType` slugs. */
+function codexPlanLabel(planType: string | null | undefined): string | undefined {
+  switch (planType) {
+    case "free":
+      return "ChatGPT Free Subscription";
+    case "go":
+      return "ChatGPT Go Subscription";
+    case "plus":
+      return "ChatGPT Plus Subscription";
+    case "pro":
+      return "ChatGPT Pro 20x Subscription";
+    case "prolite":
+      return "ChatGPT Pro 5x Subscription";
+    case "promax":
+      return "ChatGPT Pro Max Subscription";
+    case "team":
+      return "ChatGPT Team Subscription";
+    case "self_serve_business_prolite":
+    case "self_serve_business_usage_based":
+    case "business":
+      return "ChatGPT Business Subscription";
+    case "ent26":
+    case "enterprise_cbp_automation":
+    case "enterprise_cbp_usage_based":
+    case "enterprise":
+      return "ChatGPT Enterprise Subscription";
+    case "edu":
+    case "edu_plus":
+    case "edu_pro":
+      return "ChatGPT Edu Subscription";
+    case "unknown":
+      return "ChatGPT Subscription";
+    default:
+      return undefined;
+  }
+}
+
+/**
+ * `primary` / `secondary` are positions, not durations. Codex usually sends
+ * `windowDurationMins`; when it does not, paid plans expose the 5-hour and
+ * weekly pair and Free/Go expose one monthly allowance.
+ */
+function codexRateLimitsToWindows(
+  snapshot: CodexRateLimitSnapshot,
+): ReadonlyArray<ServerProviderUsageWindow> {
+  const isMonthlyPlan = snapshot.planType === "free" || snapshot.planType === "go";
+  const positions = [
+    ["primary", snapshot.primary, isMonthlyPlan ? MONTH_MINS : SESSION_MINS],
+    ["secondary", snapshot.secondary, WEEK_MINS],
+  ] as const;
+  const windows: ServerProviderUsageWindow[] = [];
+  for (const [id, window, fallbackMins] of positions) {
+    if (!window || !Number.isFinite(window.usedPercent)) continue;
+    const windowDurationMins =
+      typeof window.windowDurationMins === "number" ? window.windowDurationMins : fallbackMins;
+    const kind = kindForDuration(windowDurationMins);
+    const resetsAt = isoFromEpochSeconds(window.resetsAt);
+    windows.push({
+      id,
+      kind,
+      label: labelForKind(kind),
+      usedPercent: clampPercent(window.usedPercent),
+      windowDurationMins,
+      ...(resetsAt ? { resetsAt } : {}),
+    });
+  }
+  return windows;
+}
+
+function codexRateLimitsToLimits(input: {
+  readonly snapshot: CodexRateLimitSnapshot;
+  readonly checkedAt: string;
+}): ServerProviderUsageLimits {
+  return makeUsageLimits({
+    checkedAt: input.checkedAt,
+    windows: codexRateLimitsToWindows(input.snapshot),
+  });
+}
+
+/** Account-wide Claude windows, keyed by the usage endpoint's field name. */
+const CLAUDE_WINDOWS: Readonly<
+  Record<string, Pick<ServerProviderUsageWindow, "kind" | "label" | "windowDurationMins">>
+> = {
+  five_hour: { kind: "session", label: "Session", windowDurationMins: SESSION_MINS },
+  seven_day: { kind: "weekly", label: "Weekly", windowDurationMins: WEEK_MINS },
+};
+
+function claudeScopedWindowId(displayName: string): string {
+  return `seven_day_${displayName.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+}
+
+function claudeScopedWindow(
+  displayName: string,
+  usedPercent: number,
+  resetsAt: string | undefined,
+): ServerProviderUsageWindow {
+  return {
+    id: claudeScopedWindowId(displayName),
+    kind: "weekly",
+    label: `Weekly · ${displayName}`,
+    windowDurationMins: WEEK_MINS,
+    usedPercent: clampPercent(usedPercent),
+    ...(resetsAt ? { resetsAt } : {}),
+  };
+}
+
+function claudeWindow(
+  id: keyof typeof CLAUDE_WINDOWS & string,
+  usedPercent: number,
+  resetsAt: string | undefined,
+): ServerProviderUsageWindow {
+  const window = CLAUDE_WINDOWS[id]!;
+  return {
+    id,
+    ...window,
+    usedPercent: clampPercent(usedPercent),
+    ...(resetsAt ? { resetsAt } : {}),
+  };
+}
+
+interface ClaudeModelScopedWindow {
+  readonly display_name: string;
+  readonly utilization: number;
+  readonly resets_at: string | null;
+}
+
+type ClaudeUsageDecoded = typeof ClaudeUsage.Type;
+
+function readModelScoped(
+  rateLimits: ReadonlyArray<NonNullable<ClaudeUsageDecoded["limits"]>[number]>,
+): ReadonlyArray<ClaudeModelScopedWindow> {
+  return rateLimits.flatMap((limit) =>
+    limit.kind === "weekly_scoped" &&
+    limit.scope?.model &&
+    typeof limit.percent === "number"
+      ? [
+          {
+            display_name: limit.scope.model.display_name,
+            utilization: limit.percent,
+            resets_at: limit.resets_at ?? null,
+          },
+        ]
+      : [],
+  );
+}
+
+function claudeUsageResponseToLimits(input: {
+  readonly checkedAt: string;
+  readonly fiveHour: ClaudeUsageDecoded["five_hour"];
+  readonly sevenDay: ClaudeUsageDecoded["seven_day"];
+  readonly limits: ClaudeUsageDecoded["limits"];
+}): ServerProviderUsageLimits {
+  const windows: ServerProviderUsageWindow[] = [];
+  const fiveHour = input.fiveHour;
+  if (fiveHour && typeof fiveHour.utilization === "number") {
+    windows.push(claudeWindow("five_hour", fiveHour.utilization, isoFromString(fiveHour.resets_at)));
+  }
+  const sevenDay = input.sevenDay;
+  if (sevenDay && typeof sevenDay.utilization === "number") {
+    windows.push(claudeWindow("seven_day", sevenDay.utilization, isoFromString(sevenDay.resets_at)));
+  }
+  for (const entry of readModelScoped(input.limits ?? [])) {
+    windows.push(claudeScopedWindow(entry.display_name, entry.utilization, isoFromString(entry.resets_at)));
+  }
+  return makeUsageLimits({ checkedAt: input.checkedAt, windows });
+}
 
 const AuthFile = Schema.Struct({
   id: Schema.String,
@@ -210,31 +427,15 @@ export const makeCliproxyApi = Effect.gen(function* () {
       if (account.provider === "claude") {
         const body = yield* apiCall(config, account, "https://api.anthropic.com/api/oauth/usage");
         const usage = yield* decodeClaudeUsage(body);
-        const model_scoped = (usage.limits ?? []).flatMap((limit) =>
-          limit.kind === "weekly_scoped" && limit.scope?.model && typeof limit.percent === "number"
-            ? [
-                {
-                  display_name: limit.scope.model.display_name,
-                  utilization: limit.percent,
-                  resets_at: limit.resets_at ?? null,
-                },
-              ]
-            : [],
-        );
         return {
           ...base,
           plan: "Claude Subscription",
           usageLimits: claudeUsageResponseToLimits({
             checkedAt,
-            response: {
-              rate_limits_available: true,
-              rate_limits: {
-                five_hour: usage.five_hour ?? null,
-                seven_day: usage.seven_day ?? null,
-                model_scoped,
-              },
-            },
-          }).limits,
+            fiveHour: usage.five_hour ?? null,
+            sevenDay: usage.seven_day ?? null,
+            limits: usage.limits ?? [],
+          }),
         };
       }
       const body = yield* apiCall(config, account, `${CODEX_BASE}/usage`);

@@ -105,6 +105,7 @@ function makeExecutorLayer(input: {
         closeInstance: () => Effect.void,
         release: () => record("release"),
         detach: () => record("detach"),
+        openForThreadPiNative: () => Effect.succeed(Option.none()),
       }),
     ),
     Layer.succeed(

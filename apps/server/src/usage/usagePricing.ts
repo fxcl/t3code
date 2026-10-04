@@ -7,9 +7,11 @@
  *
  * @module usagePricing
  */
-import type { UsageCostSource, UsageModelPriceOverride } from "@t3tools/contracts";
-
-import type { UsageRecord } from "./usageTranscripts.ts";
+import type {
+  UsageCostSource,
+  UsageModelPriceOverride,
+  UsageTokenTotals,
+} from "@t3tools/contracts";
 
 /**
  * The subset of a LiteLLM entry we price against. All values are USD per token.
@@ -183,11 +185,14 @@ export function lookupRate(table: RateTable, model: string): ModelRate | null {
   return table.get(key) ?? null;
 }
 
-/** The parts of a transcript record that decide its price. */
-export type PricedRecord = Pick<
-  UsageRecord,
-  "model" | "rateModel" | "totals" | "fast" | "reportedCostUsd"
->;
+/** The parts of a usage record that decide its price. */
+export interface PricedRecord {
+  readonly model: string;
+  readonly rateModel?: string;
+  readonly totals: UsageTokenTotals;
+  readonly fast: boolean;
+  readonly reportedCostUsd: number | null;
+}
 
 export interface PricedUsage {
   readonly costUsd: number;

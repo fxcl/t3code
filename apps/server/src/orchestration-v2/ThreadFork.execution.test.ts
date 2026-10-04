@@ -17,25 +17,21 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 
-import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
-import { ClaudeProviderCapabilitiesV2 } from "./Adapters/ClaudeAdapterV2.ts";
+import { PiProviderCapabilitiesV2 } from "./Adapters/PiAdapterV2.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import { makeOrchestratorV2ReplayLayerWithRegistry } from "./testkit/ProviderReplayHarness.ts";
 
-const forkCases = (["codex", "claudeAgent"] as const).flatMap((driverName) => {
+const forkCases = (["pi"] as const).flatMap((driverName) => {
   const driver = ProviderDriverKind.make(driverName);
   const instanceId = ProviderInstanceId.make(driver);
   const modelSelection = { instanceId, model: "test-model" };
   const adapter: ProviderAdapterV2Shape = {
     instanceId,
     driver,
-    getCapabilities: () =>
-      Effect.succeed(
-        driver === "codex" ? CodexProviderCapabilitiesV2 : ClaudeProviderCapabilitiesV2,
-      ),
+    getCapabilities: () => Effect.succeed(PiProviderCapabilitiesV2),
     planSelectionTransition: () => Effect.succeed({ type: "apply_on_next_turn" }),
     openSession: () => Effect.die("Execution is paused after dispatch for handoff inspection"),
   };

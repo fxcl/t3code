@@ -1,3 +1,4 @@
+// @effect-diagnostics nodeBuiltinImport:off
 /**
  * PiAdapterV2 — orchestrator-v2 adapter for the Pi coding agent
  * (https://pi.dev), driving `pi --mode rpc` over stdio JSONL via `PiRpc.ts`.
@@ -27,6 +28,22 @@ import { HostProcessEnvironment } from "@t3tools/shared/hostProcess";
 import { getModelSelectionStringOptionValue } from "@t3tools/shared/model";
 import {
   defaultInstanceIdForDriver,
+  PI_NATIVE_IMPORT_MAX_BYTES,
+  PI_NATIVE_IMPORT_MAX_ENTRIES,
+  PI_NATIVE_IMPORT_MAX_LINES,
+  PiNativeAuthFlow,
+  PiNativeAuthState,
+  PiNativeChangelogResult,
+  PiNativeCompactResult,
+  PiNativeLastAssistantText,
+  PiNativeNavigateTreeResult,
+  PiNativeScopedModelsResult,
+  PiNativeSessionMutationResult,
+  PiNativeSessionState,
+  PiNativeSessionStats,
+  PiNativeSettingsResult,
+  PiNativeTrustResult,
+  PiNativeTreeEntryKind,
   PiSettings,
   ProviderDriverKind,
   type ChatAttachment,
@@ -42,6 +59,8 @@ import {
   type OrchestrationV2RuntimeRequest,
   type OrchestrationV2TurnItem,
   type OrchestrationV2UserInputQuestion,
+  type PiNativeSessionTree,
+  type PiNativeShareResult,
   type ProviderApprovalDecision,
   type ProviderInstanceId,
   type OrchestrationV2ProviderTurnTokenUsage,
@@ -57,9 +76,17 @@ import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
 import * as Semaphore from "effect/Semaphore";
 import * as Stream from "effect/Stream";
-import { ChildProcessSpawner } from "effect/unstable/process";
+import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
+import * as NodeFSP from "node:fs/promises";
+import * as NodePath from "node:path";
 
-import { resolveAttachmentPath } from "../../attachmentStore.ts";
+import {
+  resolveAttachmentPath,
+  toSafeThreadAttachmentSegment,
+} from "../../attachmentStore.ts";
+import { normalizePiActiveTranscript } from "../../provider/piTranscript.ts";
+import type { PiNativeAdapterShape } from "../../provider/Services/PiNativeAdapter.ts";
+import { collectUint8StreamText } from "../../stream/collectUint8StreamText.ts";
 import * as ServerConfig from "../../config.ts";
 import * as McpProviderSession from "../../mcp/McpProviderSession.ts";
 import {
@@ -115,7 +142,11 @@ const PI_UNSOLICITED_ACTIVITY_ERROR =
 const SETTLE_PROBE_MAX_ATTEMPTS = 3;
 const SETTLE_PROBE_RETRY_DELAY = Duration.millis(100);
 
-const PiProviderCapabilitiesV2 = {
+/**
+ * Static capability surface of the Pi adapter. Shared with tests that used to
+ * import per-driver capability constants from the removed adapters.
+ */
+export const PiProviderCapabilitiesV2 = {
   runtimePolicy: { enforcement: "client-boundary" },
   sessions: {
     supportsMultipleProviderThreadsPerSession: false,
@@ -250,6 +281,139 @@ function providerRef(
 }
 
 const PI_THINKING_LEVELS = new Set(["off", "minimal", "low", "medium", "high", "xhigh", "max"]);
+
+// ── Pi-native response shapes ───────────────────────────────
+
+const PiRpcExportHtmlResult = Schema.Struct({ path: Schema.String });
+
+/** Branch summaries summarize potentially hours of history; stay far over pi's own limits. */
+const PI_NAVIGATE_SUMMARIZE_TIMEOUT_MS = 600_000;
+
+const PiResumeSessionsRuntimeResult = Schema.Struct({
+  sessions: Schema.Array(
+    Schema.Struct({
+      id: Schema.String,
+      sessionId: Schema.String,
+      name: Schema.optional(Schema.String),
+      createdAt: Schema.String,
+      modifiedAt: Schema.String,
+      messageCount: Schema.Number,
+      current: Schema.Boolean,
+    }),
+  ),
+});
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function piEntryPresentation(entry: Record<string, unknown>): {
+  readonly role?: string;
+  readonly preview: string;
+  readonly editorText?: string;
+} {
+  if (entry.type === "message" && isRecord(entry.message)) {
+    const role = typeof entry.message.role === "string" ? entry.message.role : undefined;
+    const text = contentText(entry.message.content);
+    return {
+      ...(role ? { role } : {}),
+      preview: text || role || "message",
+      ...(role === "user" ? { editorText: text } : {}),
+    };
+  }
+  if (entry.type === "custom_message") {
+    if (entry.display !== true) return { preview: String(entry.customType ?? "custom message") };
+    const text = contentText(entry.content);
+    return {
+      preview: text || String(entry.customType ?? "custom message"),
+      editorText: text,
+    };
+  }
+  if (entry.type === "compaction" || entry.type === "branch_summary") {
+    return { preview: typeof entry.summary === "string" ? entry.summary : String(entry.type) };
+  }
+  if (entry.type === "model_change") {
+    return { preview: `${String(entry.provider ?? "")}/${String(entry.modelId ?? "")}` };
+  }
+  if (entry.type === "thinking_level_change") {
+    return { preview: String(entry.thinkingLevel ?? "thinking level change") };
+  }
+  if (entry.type === "custom") return { preview: String(entry.customType ?? "custom") };
+  if (entry.type === "session_info") return { preview: String(entry.name ?? "session info") };
+  if (entry.type === "label") return { preview: String(entry.label ?? "label cleared") };
+  return { preview: String(entry.type ?? "entry") };
+}
+
+/** Decode pi's raw `get_tree` payload into the wire-facing session tree. */
+export function parsePiSessionTree(raw: unknown): PiNativeSessionTree {
+  if (!isRecord(raw) || !Array.isArray(raw.tree)) {
+    throw new Error("pi get_tree response is missing its tree");
+  }
+  const entries: Array<PiNativeSessionTree["entries"][number]> = [];
+  const childIds: string[][] = [];
+  const stack = raw.tree
+    .map((rawNode) => ({ rawNode, parentIndex: null as number | null }))
+    .toReversed();
+
+  while (stack.length > 0) {
+    const node = stack.pop();
+    if (
+      !node ||
+      !isRecord(node.rawNode) ||
+      !isRecord(node.rawNode.entry) ||
+      !Array.isArray(node.rawNode.children)
+    ) {
+      throw new Error("pi get_tree response contains an invalid node");
+    }
+    const entry = node.rawNode.entry;
+    if (
+      typeof entry.id !== "string" ||
+      typeof entry.timestamp !== "string" ||
+      !Schema.is(PiNativeTreeEntryKind)(entry.type)
+    ) {
+      throw new Error("pi get_tree response contains an invalid entry");
+    }
+
+    const order = entries.length;
+    const presentation = piEntryPresentation(entry);
+    entries.push({
+      id: entry.id,
+      parentId: typeof entry.parentId === "string" ? entry.parentId : null,
+      childIds: [],
+      order,
+      kind: entry.type,
+      timestamp: entry.timestamp,
+      preview: presentation.preview,
+      ...(presentation.role ? { role: presentation.role } : {}),
+      ...(presentation.editorText !== undefined ? { editorText: presentation.editorText } : {}),
+      ...(typeof node.rawNode.label === "string" ? { label: node.rawNode.label } : {}),
+    });
+    childIds.push([]);
+    if (node.parentIndex !== null) childIds[node.parentIndex]?.push(entry.id);
+    for (let index = node.rawNode.children.length - 1; index >= 0; index -= 1) {
+      stack.push({ rawNode: node.rawNode.children[index], parentIndex: order });
+    }
+  }
+
+  const leafId = typeof raw.leafId === "string" ? raw.leafId : null;
+  return {
+    entries: entries.map((entry, index) => ({ ...entry, childIds: childIds[index] ?? [] })),
+    leafId,
+  };
+}
+
+/** Turn `gh gist create` output into the share result surfaced to clients. */
+export function parseGitHubGistShareUrl(raw: string): PiNativeShareResult | undefined {
+  try {
+    const gistUrl = new URL(raw.trim());
+    if (gistUrl.protocol !== "https:" || gistUrl.hostname !== "gist.github.com") return undefined;
+    const gistId = gistUrl.pathname.split("/").filter(Boolean).at(-1);
+    if (!gistId || !/^[a-f0-9]{5,64}$/i.test(gistId)) return undefined;
+    return { url: `https://pi.dev/session/#${gistId}`, gistUrl: gistUrl.toString() };
+  } catch {
+    return undefined;
+  }
+}
 
 // ── per-session state ─────────────────────────────────────────
 
@@ -1162,34 +1326,31 @@ export function makePiAdapterV2(
           });
         });
 
+      // Status-only extension updates that never enter the work log.
+      const EXTENSION_UI_NOTIFICATION_METHODS = new Set([
+        "notify",
+        "setStatus",
+        "clearStatus",
+        "setWidget",
+        "clearWidget",
+        "setTitle",
+        "set_editor_text",
+      ]);
+
       const handleExtensionUiRequest = Effect.fnUntraced(function* (event: PiRpcRecord) {
         const method = recordString(event, "method");
         const nativeRequestId = recordString(event, "id");
         if (method === undefined) return;
-        if (method === "notify") {
-          const state = threadState;
-          const turn = state?.activeTurn ?? null;
+        if (EXTENSION_UI_NOTIFICATION_METHODS.has(method)) {
+          // Status/widget/editor decorations never enter the work log.
+          // piCode surfaces non-empty notify payloads as a
+          // `runtime.warning` event; this codebase has no such event
+          // contract, so the content stays in server logs instead of
+          // spamming `turn_item.updated` for status-only content.
           const message = recordString(event, "message") ?? "";
-          if (turn === null || message.length === 0) return;
-          const emittedAt = yield* DateTime.now;
-          const nativeItemId = `notify:${turn.nextItemOrdinal}`;
-          yield* emitItemNode(turn, nativeItemId, "system", "completed", emittedAt, emittedAt);
-          yield* emit({
-            type: "turn_item.updated",
-            driver: PI_PROVIDER,
-            turnItem: {
-              ...baseItemFields(turn, nativeItemId, emittedAt, emittedAt),
-              status: "completed",
-              completedAt: emittedAt,
-              title: "notify",
-              type: "dynamic_tool",
-              toolName: "notify",
-              input: {
-                message,
-                notifyType: recordString(event, "notifyType") ?? "info",
-              },
-            },
-          });
+          if (method === "notify" && message.length > 0) {
+            yield* Effect.logWarning("Ignoring pi extension notify content.", { message });
+          }
           return;
         }
         if (
@@ -1305,6 +1466,19 @@ export function makePiAdapterV2(
         });
         yield* emit({ type: "node.updated", driver: PI_PROVIDER, node });
         yield* emit({ type: "turn_item.updated", driver: PI_PROVIDER, turnItem });
+        if (method === "input" || method === "editor") {
+          // Free-form extension input/editor requests have no answerable
+          // surface on this client. Register the request and then
+          // immediately decline it so the turn shows one visible
+          // cancelled notice instead of hanging until Pi's own timeout
+          // (piCode emits a `runtime.warning` here instead, which this
+          // codebase has no event contract for).
+          const pending = pendingPrompts.get(String(requestId));
+          if (pending !== undefined) {
+            pendingPrompts.delete(String(requestId));
+            yield* cancelPrompt(pending, yield* DateTime.now);
+          }
+        }
       });
 
       const emitExtensionError = Effect.fnUntraced(function* (event: PiRpcRecord) {
@@ -2201,6 +2375,614 @@ export function makePiAdapterV2(
         return { message, images };
       });
 
+      // ── Pi-native operations (reachable only through this adapter) ──
+
+      const piNativeMutationPermit = yield* Semaphore.make(1);
+
+      const piNativeError = (operation: string, cause: unknown) =>
+        new ProviderAdapter.ProviderAdapterProtocolError({
+          driver: PI_PROVIDER,
+          detail: `${operation} failed: ${
+            cause instanceof Error ? cause.message : String(cause)
+          }`,
+        });
+
+      const decodePiSessionState = (timeoutMs?: number) =>
+        request({ type: "get_state" }, timeoutMs).pipe(
+          Effect.mapError((cause) => piNativeError("get_state", cause)),
+          Effect.flatMap((data) => Schema.decodeUnknownEffect(PiNativeSessionState)(data)),
+          Effect.mapError((cause) => piNativeError("get_state", cause)),
+        );
+
+      const requestDecoded = <S extends Schema.Top>(
+        schema: S,
+        operation: string,
+        record: PiRpcRecord,
+        timeoutMs?: number,
+      ) =>
+        request(record, timeoutMs).pipe(
+          Effect.mapError((cause) => piNativeError(operation, cause)),
+          Effect.flatMap((data) => Schema.decodeUnknownEffect(schema)(data)),
+          Effect.mapError((cause) => piNativeError(operation, cause)),
+        );
+
+      const getPiSessionTree: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getSessionTree"] =
+        () =>
+          request({ type: "get_tree" }).pipe(
+            Effect.mapError((cause) => piNativeError("get_tree", cause)),
+            Effect.flatMap((data) =>
+              Effect.try({
+                try: () => parsePiSessionTree(data),
+                catch: (cause) => piNativeError("get_tree", cause),
+              }),
+            ),
+          );
+
+      const getPiActiveTranscript: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getActiveTranscript"] =
+        (threadId) =>
+          Effect.gen(function* () {
+            const data = yield* request({ type: "get_entries" }).pipe(
+              Effect.mapError((cause) => piNativeError("get_entries", cause)),
+            );
+            const entriesData = isRecord(data) ? data : {};
+            const entries = Array.isArray(entriesData.entries) ? entriesData.entries : [];
+            const leafId = typeof entriesData.leafId === "string" ? entriesData.leafId : undefined;
+            const transcript = yield* Effect.try({
+              try: () => normalizePiActiveTranscript(entries, leafId, threadId),
+              catch: (cause) => piNativeError("get_entries", cause),
+            });
+            yield* options.fileSystem
+              .makeDirectory(options.serverConfig.attachmentsDir, { recursive: true })
+              .pipe(
+                Effect.mapError((cause) =>
+                  piNativeError("materialize_transcript_images", cause),
+                ),
+              );
+            yield* Effect.forEach(
+              transcript.images ?? [],
+              ({ attachment, data: bytes }) => {
+                const attachmentPath = resolveAttachmentPath({
+                  attachmentsDir: options.serverConfig.attachmentsDir,
+                  attachment,
+                });
+                return attachmentPath === null
+                  ? Effect.fail(
+                      piNativeError(
+                        "materialize_transcript_images",
+                        "Invalid attachment path",
+                      ),
+                    )
+                  : options.fileSystem.writeFile(attachmentPath, bytes).pipe(
+                      Effect.mapError((cause) =>
+                        piNativeError("materialize_transcript_images", cause),
+                      ),
+                    );
+              },
+              { concurrency: 1, discard: true },
+            );
+            return transcript;
+          });
+
+      const navigatePiSessionTree: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["navigateSessionTree"] =
+        (input) =>
+          Effect.gen(function* () {
+            const state = yield* decodePiSessionState(2_000);
+            if (state.isStreaming || state.isCompacting) {
+              return yield* protocolError(
+                "Wait for the current response or compaction to finish before navigating.",
+              );
+            }
+            return yield* requestDecoded(
+              PiNativeNavigateTreeResult,
+              "navigate_tree",
+              {
+                type: "navigate_tree",
+                targetId: input.targetId,
+                ...(input.summarize !== undefined ? { summarize: input.summarize } : {}),
+                ...(input.customInstructions !== undefined
+                  ? { customInstructions: input.customInstructions }
+                  : {}),
+                ...(input.replaceInstructions !== undefined
+                  ? { replaceInstructions: input.replaceInstructions }
+                  : {}),
+                ...(input.label !== undefined ? { label: input.label } : {}),
+              },
+              // piCode waits indefinitely for branch summaries; t3code's
+              // bounded request uses a generous ceiling instead.
+              input.summarize === true ? PI_NAVIGATE_SUMMARIZE_TIMEOUT_MS : undefined,
+            );
+          });
+
+      const abortPiBranchSummary: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["abortBranchSummary"] =
+        () =>
+          request({ type: "abort_branch_summary" }).pipe(
+            Effect.mapError((cause) => piNativeError("abort_branch_summary", cause)),
+            Effect.asVoid,
+          );
+
+      const setPiEntryLabel: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["setEntryLabel"] =
+        (input) =>
+          request({
+            type: "set_entry_label",
+            targetId: input.targetId,
+            ...(input.label !== undefined ? { label: input.label } : {}),
+          }).pipe(
+            Effect.mapError((cause) => piNativeError("set_entry_label", cause)),
+            Effect.asVoid,
+          );
+
+      const reloadPiResources: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["reloadResources"] =
+        () =>
+          Effect.gen(function* () {
+            const state = yield* decodePiSessionState(2_000);
+            if (state.isStreaming) {
+              return yield* protocolError(
+                "Wait for the current response to finish before reloading.",
+              );
+            }
+            if (state.isCompacting) {
+              return yield* protocolError(
+                "Wait for compaction to finish before reloading.",
+              );
+            }
+            yield* request({ type: "reload" }).pipe(
+              Effect.mapError((cause) => piNativeError("reload", cause)),
+            );
+          });
+
+      const compactPiSession: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["compactSession"] =
+        (input) =>
+          requestDecoded(
+            PiNativeCompactResult,
+            "compact",
+            {
+              type: "compact",
+              ...(input.customInstructions !== undefined
+                ? { customInstructions: input.customInstructions }
+                : {}),
+            },
+            // Compaction summarizes the whole session; give it the same
+            // generous ceiling as branch summaries.
+            PI_NAVIGATE_SUMMARIZE_TIMEOUT_MS,
+          );
+
+      const getPiSessionStateAndStats: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getSessionStateAndStats"] =
+        () =>
+          Effect.gen(function* () {
+            const state = yield* decodePiSessionState();
+            const stats = yield* requestDecoded(
+              PiNativeSessionStats,
+              "get_session_stats",
+              { type: "get_session_stats" },
+            );
+            return { state, stats };
+          });
+
+      const setPiSessionName: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["setSessionName"] =
+        (input) =>
+          request({ type: "set_session_name", name: input.name }).pipe(
+            Effect.mapError((cause) => piNativeError("set_session_name", cause)),
+            // Mirror the user's rename so the turn path's title sync never
+            // overwrites it with the app thread title.
+            Effect.tap(() => Effect.sync(() => (appliedSessionName = input.name))),
+            Effect.asVoid,
+          );
+
+      const getPiLastAssistantText: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getLastAssistantText"] =
+        () =>
+          requestDecoded(
+            PiNativeLastAssistantText,
+            "get_last_assistant_text",
+            { type: "get_last_assistant_text" },
+          );
+
+      const exportPiSessionHtml: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["exportSessionHtml"] =
+        (input) =>
+          Effect.gen(function* () {
+            const threadSegment = toSafeThreadAttachmentSegment(input.threadId);
+            if (threadSegment === null) {
+              return yield* protocolError(
+                "Cannot export a Pi session with an invalid thread id.",
+              );
+            }
+            const exportDir = yield* options.fileSystem
+              .makeTempDirectory({ prefix: "d4-export-" })
+              .pipe(Effect.mapError((cause) => piNativeError("export_html", cause)));
+            const canonicalExportDir = yield* options.fileSystem
+              .realPath(exportDir)
+              .pipe(Effect.mapError((cause) => piNativeError("export_html", cause)));
+            const outputPath = NodePath.join(canonicalExportDir, `${threadSegment}.html`);
+            return yield* Effect.gen(function* () {
+              const data = yield* request({ type: "export_html", outputPath }).pipe(
+                Effect.mapError((cause) => piNativeError("export_html", cause)),
+              );
+              const result = yield* Schema.decodeUnknownEffect(PiRpcExportHtmlResult)(data).pipe(
+                Effect.mapError((cause) => piNativeError("export_html", cause)),
+              );
+              if (result.path !== outputPath) {
+                return yield* protocolError("Pi returned an unexpected export path.");
+              }
+              const outputInfo = yield* Effect.tryPromise({
+                try: () => NodeFSP.lstat(outputPath),
+                catch: (cause) =>
+                  piNativeError(
+                    "export_html",
+                    new Error(
+                      "Pi did not create the requested export file.",
+                      { cause },
+                    ),
+                  ),
+              });
+              if (!outputInfo.isFile() || outputInfo.isSymbolicLink() || outputInfo.size === 0) {
+                return yield* protocolError("Pi created an invalid export file.");
+              }
+              const canonicalOutputPath = yield* options.fileSystem
+                .realPath(outputPath)
+                .pipe(Effect.mapError((cause) => piNativeError("export_html", cause)));
+              const relativeOutputPath = NodePath.relative(
+                canonicalExportDir,
+                canonicalOutputPath,
+              );
+              if (
+                relativeOutputPath === "" ||
+                relativeOutputPath === ".." ||
+                relativeOutputPath.startsWith(`..${NodePath.sep}`) ||
+                NodePath.isAbsolute(relativeOutputPath)
+              ) {
+                return yield* protocolError(
+                  "Pi created an export file outside the export directory.",
+                );
+              }
+              return {
+                canonicalPath: canonicalOutputPath,
+                fileName: NodePath.basename(canonicalOutputPath),
+              };
+            }).pipe(
+              Effect.tapError(() =>
+                options.fileSystem
+                  .remove(exportDir, { recursive: true, force: true })
+                  .pipe(Effect.catch(() => Effect.void)),
+              ),
+            );
+          });
+
+      const switchPiSession = (
+        operation: string,
+        command: PiRpcRecord,
+        timeoutMs?: number,
+      ): Effect.Effect<
+        PiNativeSessionMutationResult,
+        ProviderAdapter.ProviderAdapterV2Error
+      > =>
+        Effect.gen(function* () {
+          const state = yield* decodePiSessionState(2_000);
+          if (state.isStreaming || state.isCompacting) {
+            return yield* protocolError(
+              "Wait for the current response or compaction to finish.",
+            );
+          }
+          const data = yield* request(command, timeoutMs).pipe(
+            Effect.mapError((cause) => piNativeError(operation, cause)),
+          );
+          const result = yield* Schema.decodeUnknownEffect(PiNativeSessionMutationResult)(
+            data,
+          ).pipe(Effect.mapError((cause) => piNativeError(operation, cause)));
+          if (result.cancelled) return result;
+          if (threadState === null) {
+            return yield* protocolError("Pi session has no registered thread");
+          }
+          const stateData = yield* request({ type: "get_state" }).pipe(
+            Effect.mapError((cause) => piNativeError("get_state", cause)),
+          );
+          const nativeId = recordString(stateData, "sessionFile");
+          if (nativeId === undefined) {
+            return yield* protocolError(
+              "get_state returned no persisted sessionFile",
+              stateData,
+            );
+          }
+          lastNativeThreadId = nativeId;
+          appliedModel = null;
+          appliedThinking = null;
+          appliedSessionName = null;
+          const updatedAt = yield* DateTime.now;
+          threadState.providerThread = {
+            ...threadState.providerThread,
+            nativeThreadRef: providerRef(nativeId),
+            nativeConversationHeadRef: null,
+            status: "idle",
+            updatedAt,
+          };
+          yield* emit({
+            type: "provider_thread.updated",
+            driver: PI_PROVIDER,
+            providerThread: threadState.providerThread,
+          });
+          return result;
+        });
+
+      const piResumeSessionIds = new Map<string, string>();
+
+      const getPiSettings: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getSettings"] =
+        (input) =>
+          requestDecoded(
+            PiNativeSettingsResult,
+            "get_safe_settings",
+            { type: "get_safe_settings", scope: input.scope },
+          );
+
+      const updatePiSettings: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["updateSettings"] =
+        (input) =>
+          requestDecoded(
+            PiNativeSettingsResult,
+            "set_safe_settings",
+            { type: "set_safe_settings", scope: input.scope, values: input.values },
+          );
+
+      const getPiScopedModels: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getScopedModels"] =
+        (input) =>
+          requestDecoded(
+            PiNativeScopedModelsResult,
+            "get_scoped_models",
+            { type: "get_scoped_models", scope: input.scope },
+          );
+
+      const updatePiScopedModels: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["updateScopedModels"] =
+        (input) =>
+          requestDecoded(
+            PiNativeScopedModelsResult,
+            "set_scoped_models",
+            { type: "set_scoped_models", scope: input.scope, patterns: input.patterns },
+          );
+
+      const listPiResumeSessions: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["listResumeSessions"] =
+        () =>
+          Effect.gen(function* () {
+            const result = yield* requestDecoded(
+              PiResumeSessionsRuntimeResult,
+              "list_resume_sessions",
+              { type: "list_resume_sessions" },
+            );
+            piResumeSessionIds.clear();
+            for (const session of result.sessions) {
+              piResumeSessionIds.set(session.id, session.sessionId);
+            }
+            return {
+              sessions: result.sessions.map(({ sessionId: _sessionId, ...session }) => session),
+            };
+          });
+
+      const resumePiSession: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["resumeSession"] =
+        (input) =>
+          Effect.gen(function* () {
+            const targetSessionId = piResumeSessionIds.get(input.sessionId);
+            if (targetSessionId === undefined) {
+              return yield* protocolError(
+                "Unknown or expired Pi session id. Refresh the resume list first.",
+              );
+            }
+            return yield* switchPiSession("resume_session", {
+              type: "resume_session",
+              sessionId: input.sessionId,
+            });
+          });
+
+      const importPiSession: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["importSession"] =
+        (input) =>
+          Effect.gen(function* () {
+            const bytes = Buffer.byteLength(input.content, "utf8");
+            const lines = input.content.split("\n").length;
+            if (bytes > PI_NATIVE_IMPORT_MAX_BYTES || lines > PI_NATIVE_IMPORT_MAX_LINES) {
+              return yield* protocolError(
+                "Imported session exceeds the byte or line limit.",
+              );
+            }
+            const entries = input.content
+              .split("\n")
+              .filter((line) => line.trim().length > 0).length;
+            if (entries > PI_NATIVE_IMPORT_MAX_ENTRIES) {
+              return yield* protocolError("Imported session has too many entries.");
+            }
+            return yield* switchPiSession("import_session", {
+              type: "import_session",
+              filename: input.filename,
+              content: input.content,
+            });
+          });
+
+      const forkPiSession: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["forkSession"] =
+        (input) =>
+          switchPiSession(
+            "fork_session",
+            { type: "fork_session", entryId: input.targetId },
+            PI_NAVIGATE_SUMMARIZE_TIMEOUT_MS,
+          );
+
+      const clonePiSession: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["cloneSession"] =
+        () => switchPiSession("clone_session", { type: "clone_session" });
+
+      const getPiTrust: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getTrust"] =
+        () =>
+          requestDecoded(
+            PiNativeTrustResult,
+            "get_project_trust",
+            { type: "get_project_trust" },
+          );
+
+      const setPiTrust: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["setTrust"] =
+        (input) =>
+          Effect.gen(function* () {
+            if (input.trusted && input.confirmed !== true) {
+              return yield* protocolError(
+                "Trusting a project requires explicit confirmation.",
+              );
+            }
+            return yield* requestDecoded(
+              PiNativeTrustResult,
+              "set_project_trust",
+              {
+                type: "set_project_trust",
+                trusted: input.trusted,
+                confirmed: input.confirmed,
+              },
+            );
+          });
+
+      const getPiChangelog: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getChangelog"] =
+        () =>
+          requestDecoded(
+            PiNativeChangelogResult,
+            "get_changelog",
+            { type: "get_changelog" },
+          );
+
+      const getPiAuthState: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getAuthState"] =
+        () =>
+          requestDecoded(PiNativeAuthState, "get_auth_state", { type: "get_auth_state" });
+
+      const beginPiAuthLogin: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["beginAuthLogin"] =
+        (input) =>
+          requestDecoded(
+            PiNativeAuthFlow,
+            "begin_auth_login",
+            {
+              type: "begin_auth_login",
+              providerId: input.providerId,
+              authType: input.authType,
+            },
+          );
+
+      const getPiAuthFlow: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getAuthFlow"] =
+        (input) =>
+          requestDecoded(
+            PiNativeAuthFlow,
+            "get_auth_flow",
+            { type: "get_auth_flow", flowId: input.flowId },
+          );
+
+      const respondPiAuthFlow: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["respondAuthFlow"] =
+        (input) =>
+          requestDecoded(
+            PiNativeAuthFlow,
+            "respond_auth_flow",
+            {
+              type: "respond_auth_flow",
+              flowId: input.flowId,
+              promptId: input.promptId,
+              response: input.response,
+            },
+          );
+
+      const cancelPiAuthFlow: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["cancelAuthFlow"] =
+        (input) =>
+          requestDecoded(
+            PiNativeAuthFlow,
+            "cancel_auth_flow",
+            { type: "cancel_auth_flow", flowId: input.flowId },
+          );
+
+      const logoutPiAuth: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["logoutAuth"] =
+        (input) =>
+          request({
+            type: "logout_auth",
+            providerId: input.providerId,
+            confirmed: input.confirmed,
+          }).pipe(
+            Effect.mapError((cause) => piNativeError("logout_auth", cause)),
+            Effect.asVoid,
+          );
+
+      const runGitHubCli = (args: ReadonlyArray<string>, cwd: string) =>
+        Effect.gen(function* () {
+          const child = yield* options.spawner.spawn(
+            ChildProcess.make("gh", [...args], { cwd, extendEnv: true }),
+          );
+          const [stdout, exitCode] = yield* Effect.all(
+            [
+              collectUint8StreamText({ stream: child.stdout, maxBytes: 1_048_576 }),
+              child.exitCode,
+              Stream.runDrain(child.stderr),
+            ],
+            { concurrency: "unbounded" },
+          );
+          if (Number(exitCode) !== 0) {
+            return yield* protocolError(`gh ${args[0]} exited with code ${exitCode}`);
+          }
+          return stdout.text;
+        }).pipe(Effect.scoped);
+
+      const sharePiSession: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["shareSession"] =
+        (input) =>
+          Effect.gen(function* () {
+            if (!input.confirmed) {
+              return yield* protocolError("Sharing requires explicit confirmation.");
+            }
+            // piCode shares from the owning session's cwd; the t3code thread
+            // state carries no per-session cwd, so the server cwd is used.
+            const cwd = options.serverConfig.cwd;
+            yield* runGitHubCli(["auth", "status"], cwd).pipe(
+              Effect.mapError((cause) => piNativeError("share_auth", cause)),
+            );
+            const exported = yield* exportPiSessionHtml({ threadId: input.threadId });
+            return yield* Effect.gen(function* () {
+              const gistOutput = yield* runGitHubCli(
+                ["gist", "create", "--public=false", exported.canonicalPath],
+                cwd,
+              ).pipe(Effect.mapError((cause) => piNativeError("share_gist", cause)));
+              const result = parseGitHubGistShareUrl(gistOutput);
+              if (result === undefined) {
+                return yield* protocolError("GitHub CLI returned an invalid gist URL.");
+              }
+              return result;
+            }).pipe(
+              Effect.ensuring(
+                options.fileSystem
+                  .remove(NodePath.dirname(exported.canonicalPath), {
+                    recursive: true,
+                    force: true,
+                  })
+                  .pipe(Effect.catch(() => Effect.void)),
+              ),
+            );
+          });
+
+      const withPiSessionLock: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["withSessionLock"] =
+        (_threadId, effect) => piNativeMutationPermit.withPermit(effect);
+
+      const piNative: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error> = {
+        withSessionLock: withPiSessionLock,
+        getSessionTree: getPiSessionTree,
+        getActiveTranscript: getPiActiveTranscript,
+        navigateSessionTree: navigatePiSessionTree,
+        abortBranchSummary: abortPiBranchSummary,
+        setEntryLabel: setPiEntryLabel,
+        reloadResources: reloadPiResources,
+        compactSession: compactPiSession,
+        getSessionStateAndStats: getPiSessionStateAndStats,
+        setSessionName: setPiSessionName,
+        getLastAssistantText: getPiLastAssistantText,
+        exportSessionHtml: exportPiSessionHtml,
+        getSettings: getPiSettings,
+        updateSettings: updatePiSettings,
+        getScopedModels: getPiScopedModels,
+        updateScopedModels: updatePiScopedModels,
+        listResumeSessions: listPiResumeSessions,
+        resumeSession: resumePiSession,
+        importSession: importPiSession,
+        forkSession: forkPiSession,
+        cloneSession: clonePiSession,
+        getTrust: getPiTrust,
+        setTrust: setPiTrust,
+        getChangelog: getPiChangelog,
+        getAuthState: getPiAuthState,
+        beginAuthLogin: beginPiAuthLogin,
+        getAuthFlow: getPiAuthFlow,
+        respondAuthFlow: respondPiAuthFlow,
+        cancelAuthFlow: cancelPiAuthFlow,
+        logoutAuth: logoutPiAuth,
+        shareSession: sharePiSession,
+      };
+
       const runtime: ProviderAdapter.ProviderAdapterV2SessionRuntime = {
         instanceId: options.instanceId,
         driver: PI_PROVIDER,
@@ -2820,6 +3602,9 @@ export function makePiAdapterV2(
                 }),
             ),
           ),
+        // Every `piNative.*` wire RPC routes through this operation set; the
+        // per-thread session handle was resolved by the session manager.
+        piNative,
       };
       return runtime;
     }),

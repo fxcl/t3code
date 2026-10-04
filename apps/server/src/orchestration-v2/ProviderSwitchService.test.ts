@@ -11,7 +11,7 @@ import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
-import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { PiProviderCapabilitiesV2 } from "./Adapters/PiAdapterV2.ts";
 import type { ProviderAdapterV2Shape } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import { acpSelectionTransition } from "./ProviderSelectionTransition.ts";
@@ -22,9 +22,9 @@ const currentInstanceId = ProviderInstanceId.make("codex_primary");
 const currentSessionId = ProviderSessionId.make("session_primary");
 const now = DateTime.makeUnsafe("2026-06-20T00:00:00.000Z");
 const capabilitiesWithoutModelSwitch = {
-  ...CodexProviderCapabilitiesV2,
+  ...PiProviderCapabilitiesV2,
   sessions: {
-    ...CodexProviderCapabilitiesV2.sessions,
+    ...PiProviderCapabilitiesV2.sessions,
     supportsModelSwitchInSession: false,
   },
 };
@@ -279,7 +279,7 @@ it.effect.each(["stopped", "error"] as const)(
     Effect.gen(function* () {
       const service = yield* ProviderSwitch.ProviderSwitchServiceV2;
       const result = yield* service.plan({
-        projection: deadNativeThreadProjection(deadStatus, CodexProviderCapabilitiesV2),
+        projection: deadNativeThreadProjection(deadStatus, PiProviderCapabilitiesV2),
         targetModelSelection: { instanceId: currentInstanceId, model: "gpt-5.2-codex" },
       });
       // Static capabilities report no in-session switch, but the dead

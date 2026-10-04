@@ -7,7 +7,6 @@ import * as CliError from "effect/unstable/cli/CliError";
 
 import * as NetService from "@t3tools/shared/Net";
 import packageJson from "../package.json" with { type: "json" };
-import { acpMcpBridgeCommand, acpMcpCallCommand } from "./cli/acpMcpBridge.ts";
 import { authCommand } from "./cli/auth.ts";
 import { appCommand } from "./cli/app.ts";
 import { connectCommand } from "./cli/connect.ts";
@@ -19,7 +18,6 @@ import { runServerCommand, serveCommand, startCommand } from "./cli/server.ts";
 import { updateCommand } from "./cli/update.ts";
 import { uninstallCommand } from "./cli/uninstall.ts";
 import { serviceLauncherCommand } from "./cli/serviceLauncher.ts";
-import { claudeHistoryCommand } from "./cli/claudeHistory.ts";
 import { sshHelperCommand } from "./cli/sshHelper.ts";
 import { serviceCommand } from "./cli/service.ts";
 import { servicePreflightCommand } from "./cli/servicePreflight.ts";
@@ -58,8 +56,6 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
     Command.withDescription("Run the T3 Code server."),
     Command.withHandler((flags) => runServerCommand(flags)),
     Command.withSubcommands([
-      acpMcpBridgeCommand,
-      acpMcpCallCommand,
       startCommand,
       serveCommand,
       appCommand,
@@ -70,7 +66,6 @@ export const makeCli = ({ cloudEnabled = hasCloudPublicConfig } = {}) =>
       updateCommand,
       uninstallCommand,
       serviceLauncherCommand,
-      claudeHistoryCommand,
       sshHelperCommand,
 
       servicePreflightCommand,

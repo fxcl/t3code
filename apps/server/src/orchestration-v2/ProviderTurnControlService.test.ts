@@ -22,7 +22,7 @@ import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
-import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { PiProviderCapabilitiesV2 } from "./Adapters/PiAdapterV2.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import type { ProviderAdapterV2SessionRuntime } from "./ProviderAdapter.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
@@ -172,7 +172,7 @@ it.effect(
         status: "running" as const,
         cwd: "/workspace",
         model: modelSelection.model,
-        capabilities: CodexProviderCapabilitiesV2,
+        capabilities: PiProviderCapabilitiesV2,
         createdAt: now,
         updatedAt: now,
         lastError: null,
@@ -270,6 +270,7 @@ it.effect(
           closeInstance: () => Effect.void,
           release: () => Effect.void,
           detach: () => Effect.void,
+          openForThreadPiNative: () => Effect.succeed(Option.none()),
         }),
       );
       const controlLayer = ProviderTurnControlService.layer.pipe(

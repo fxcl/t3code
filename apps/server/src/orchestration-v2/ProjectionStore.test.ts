@@ -29,7 +29,7 @@ import * as SqlClient from "effect/unstable/sql/SqlClient";
 import { projectThreadAwarenessV2 } from "@t3tools/shared/agentAwareness";
 
 import { SqlitePersistenceMemory } from "../persistence/Layers/Sqlite.ts";
-import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { PiProviderCapabilitiesV2 } from "./Adapters/PiAdapterV2.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import {
   buildBoundedThreadProjection,
@@ -1433,7 +1433,7 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
             status: "running",
             cwd: "/workspace",
             model: modelSelection.model,
-            capabilities: CodexProviderCapabilitiesV2,
+            capabilities: PiProviderCapabilitiesV2,
             createdAt: now,
             updatedAt: now,
             lastError: null,
@@ -2337,7 +2337,7 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
         status: "ready" as const,
         cwd: "/workspace",
         model: modelSelection.model,
-        capabilities: CodexProviderCapabilitiesV2,
+        capabilities: PiProviderCapabilitiesV2,
         createdAt: now,
         updatedAt: now,
         lastError: null,
@@ -2459,7 +2459,7 @@ it.layer(TestLayer)("ProjectionStoreV2", (it) => {
         status: "error" as const,
         cwd: "/workspace",
         model: modelSelection.model,
-        capabilities: CodexProviderCapabilitiesV2,
+        capabilities: PiProviderCapabilitiesV2,
         createdAt: now,
         updatedAt: now,
         lastError: "provider process exited",

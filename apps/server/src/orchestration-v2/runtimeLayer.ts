@@ -6,8 +6,6 @@ import * as OrchestrationEventStore from "../persistence/Layers/OrchestrationEve
 import { layer as providerSessionRuntimeLayer } from "../persistence/ProviderSessionRuntime.ts";
 import * as TextGeneration from "../textGeneration/TextGeneration.ts";
 import { ProviderAuthServiceLive } from "../provider/Layers/ProviderAuthService.ts";
-import { layer as agentSessionImporterLayer } from "../project/AgentSessionImporter.ts";
-import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import { layer as projectServiceLayer } from "../project/ProjectService.ts";
 import { layer as projectSetupScriptRunnerLayer } from "../project/ProjectSetupScriptRunner.ts";
 import * as ManagedProjectFolders from "../project/ManagedProjectFolders.ts";
@@ -119,6 +117,9 @@ const providerSessionManagerProvided = providerSessionManagerLayer.pipe(
       idAllocatorLayer,
       providerEventIngestorProvided,
       projectionStoreLayer,
+      // openForThreadPiNative resolves a thread's runtime policy through the
+      // same service the turn path uses.
+      runtimePolicyProvided,
     ),
   ),
 );
@@ -211,19 +212,6 @@ const orchestratorProvided = orchestratorLayer.pipe(
   ),
 );
 
-const agentSessionImporterProvided = agentSessionImporterLayer.pipe(
-  Layer.provide(
-    Layer.mergeAll(
-      AgentSessionScanner.layer,
-      ProjectServiceLayerLive,
-      orchestratorProvided,
-      eventSinkProvided,
-      idAllocatorLayer,
-      providerSessionRuntimeLayer,
-    ),
-  ),
-);
-
 const threadManagementProvided = threadManagementServiceLayer.pipe(
   Layer.provide(Layer.merge(orchestratorProvided, legacyV1ThreadImporterProvided)),
 );
@@ -310,7 +298,6 @@ export const OrchestrationV2ProductionLayerLive = Layer.mergeAll(
     Layer.provide(Layer.mergeAll(projectionStoreLayer, threadManagementProvided)),
   ),
   providerContinuationWorkerProvided,
-  agentSessionImporterProvided,
 ).pipe(
   Layer.provide(Scheduler.layer),
   Layer.provideMerge(OrchestrationEventInfrastructureLayerLive),

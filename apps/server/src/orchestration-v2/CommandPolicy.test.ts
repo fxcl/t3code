@@ -11,16 +11,14 @@ import {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
-import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
-import { CursorProviderCapabilitiesV2 } from "./Adapters/CursorAdapterV2.ts";
-import { GrokProviderCapabilitiesV2 } from "./Adapters/GrokAdapterV2.ts";
+import { PiProviderCapabilitiesV2 } from "./Adapters/PiAdapterV2.ts";
 import * as CommandPolicy from "./CommandPolicy.ts";
 
 const commandId = CommandId.make("command-policy-test");
 const threadId = ThreadId.make("command-policy-thread");
 const activeRunId = RunId.make("command-policy-active-run");
 
-const baseCapabilities: OrchestrationV2ProviderCapabilities = CodexProviderCapabilitiesV2;
+const baseCapabilities: OrchestrationV2ProviderCapabilities = PiProviderCapabilitiesV2;
 
 function capabilities(
   override: (current: OrchestrationV2ProviderCapabilities) => OrchestrationV2ProviderCapabilities,
@@ -182,15 +180,18 @@ layer("CommandPolicyV2", (it) => {
     }),
   );
 
-  it.effect("uses interrupt-and-restart steering for Grok ACP", () =>
+  it.effect("uses interrupt-and-restart steering when active steering is unavailable", () =>
     Effect.gen(function* () {
       const policy = yield* CommandPolicy.CommandPolicyV2;
 
       const result = yield* policy.decideSteeringExecution({
         commandId,
         threadId,
-        providerInstanceId: ProviderInstanceId.make("grok"),
-        capabilities: GrokProviderCapabilitiesV2,
+        providerInstanceId: ProviderInstanceId.make("pi"),
+        capabilities: {
+          ...PiProviderCapabilitiesV2,
+          turns: { ...PiProviderCapabilitiesV2.turns, supportsActiveSteering: false },
+        },
       });
 
       assert.equal(result, "interrupt_restart");
@@ -205,7 +206,7 @@ layer("CommandPolicyV2", (it) => {
         commandId,
         threadId,
         providerInstanceId: ProviderInstanceId.make("codex"),
-        capabilities: CodexProviderCapabilitiesV2,
+        capabilities: PiProviderCapabilitiesV2,
         forceRestart: true,
       });
 
@@ -475,7 +476,7 @@ layer("CommandPolicyV2", (it) => {
         commandId,
         threadId,
         providerInstanceId: ProviderInstanceId.make("codex"),
-        capabilities: CodexProviderCapabilitiesV2,
+        capabilities: PiProviderCapabilitiesV2,
         sameProvider: true,
         hasStrongNativeSource: true,
         sourceRunStatus: "completed",
@@ -486,15 +487,22 @@ layer("CommandPolicyV2", (it) => {
     }),
   );
 
-  it.effect("falls back to portable context when Cursor cannot fork natively", () =>
+  it.effect("falls back to portable context when the provider cannot fork natively", () =>
     Effect.gen(function* () {
       const policy = yield* CommandPolicy.CommandPolicyV2;
 
       const result = yield* policy.decideForkExecution({
         commandId,
         threadId,
-        providerInstanceId: ProviderInstanceId.make("cursor"),
-        capabilities: CursorProviderCapabilitiesV2,
+        providerInstanceId: ProviderInstanceId.make("pi"),
+        capabilities: {
+          ...PiProviderCapabilitiesV2,
+          threads: {
+            ...PiProviderCapabilitiesV2.threads,
+            canForkThread: false,
+            canForkFromTurn: false,
+          },
+        },
         sameProvider: true,
         hasStrongNativeSource: true,
         sourceRunStatus: "completed",
@@ -505,15 +513,18 @@ layer("CommandPolicyV2", (it) => {
     }),
   );
 
-  it.effect("falls back to portable context when Grok ACP cannot fork natively", () =>
+  it.effect("falls back to portable context when forking from a specific turn is unsupported", () =>
     Effect.gen(function* () {
       const policy = yield* CommandPolicy.CommandPolicyV2;
 
       const result = yield* policy.decideForkExecution({
         commandId,
         threadId,
-        providerInstanceId: ProviderInstanceId.make("grok"),
-        capabilities: GrokProviderCapabilitiesV2,
+        providerInstanceId: ProviderInstanceId.make("pi"),
+        capabilities: {
+          ...PiProviderCapabilitiesV2,
+          threads: { ...PiProviderCapabilitiesV2.threads, canForkFromTurn: false },
+        },
         sameProvider: true,
         hasStrongNativeSource: true,
         sourceRunStatus: "completed",

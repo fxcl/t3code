@@ -23,6 +23,7 @@ import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
 import * as PlatformError from "effect/PlatformError";
 import * as Queue from "effect/Queue";
 import * as Schema from "effect/Schema";
@@ -358,7 +359,23 @@ const openRuntime = Effect.fnUntraced(function* (
         if (predicate(event)) return event;
       }
     });
-  return { runtime, takeEvent };
+  const drainEvents = Effect.gen(function* () {
+    const events: ProviderAdapterV2Event[] = [];
+    while (true) {
+      const event = yield* Queue.poll(emitted);
+      if (Option.isNone(event)) return events;
+      events.push(event.value);
+    }
+  });
+  const drainUntilTerminal = Effect.gen(function* () {
+    const events: ProviderAdapterV2Event[] = [];
+    while (true) {
+      const event = yield* Queue.take(emitted);
+      events.push(event);
+      if (event.type === "turn.terminal") return events;
+    }
+  });
+  return { runtime, takeEvent, drainEvents, drainUntilTerminal };
 });
 
 const makeAppThread = Effect.fnUntraced(function* (model: string, threadId = THREAD_ID) {
@@ -1183,6 +1200,43 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
+  it.effect("emits no assistant item for a contentless assistant message", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, drainUntilTerminal } = yield* openRuntime(fake);
+      const providerThread = yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* startTurn(runtime, providerThread);
+      yield* fake.takeRequest("prompt");
+      yield* fake.emit({ type: "agent_start" });
+      // Cursor-backed Pi catalog models produced message frames with no
+      // content deltas at all: the assistant item must stay unopened and
+      // the turn must still settle.
+      yield* fake.emit({ type: "message_start", message: { role: "assistant" } });
+      yield* fake.emit({
+        type: "message_end",
+        message: { role: "assistant", content: [], stopReason: "stop" },
+      });
+      yield* fake.emit({ type: "agent_settled" });
+      yield* fake.takeRequest("get_state");
+      const events = yield* drainUntilTerminal;
+      const terminal = events.find((event) => event.type === "turn.terminal");
+      assert.isTrue(terminal?.type === "turn.terminal" && terminal.status === "completed");
+      assert.isTrue(
+        events.every(
+          (event) =>
+            !(
+              event.type === "turn_item.updated" &&
+              (event.turnItem.type === "assistant_message" || event.turnItem.type === "reasoning")
+            ),
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
   it.effect("leaves /compacted as an ordinary prompt", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
@@ -1411,7 +1465,50 @@ describe("PiAdapterV2", () => {
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 
-  it.effect("offers an explicit empty value for extension input dialogs", () =>
+  it.effect("keeps status-only extension notifications out of the work log", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent, drainEvents } = yield* openRuntime(fake);
+      yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      for (const method of ["setStatus", "clearStatus", "setWidget", "clearWidget", "setTitle"]) {
+        yield* fake.emit({ type: "extension_ui_request", id: `ui-${method}`, method });
+      }
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "ui-notify",
+        method: "notify",
+        message: "still working",
+        notifyType: "info",
+      });
+      // A trailing confirm acts as the ordering barrier: once its pending
+      // request is observed, every earlier notification has been
+      // processed. Only the barrier's own approval may have surfaced.
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "ui-barrier",
+        method: "confirm",
+        title: "Barrier",
+      });
+      yield* takeEvent(
+        (event) =>
+          event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
+      );
+      const events = yield* drainEvents;
+      assert.isTrue(
+        events.every(
+          (event) =>
+            event.type === "node.updated" ||
+            (event.type === "turn_item.updated" && event.turnItem.type === "approval_request"),
+        ),
+      );
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("declines free-form extension input dialogs with a cancelled notice", () =>
     Effect.gen(function* () {
       const fake = yield* makeFakePi;
       const { runtime, takeEvent } = yield* openRuntime(fake);
@@ -1426,23 +1523,50 @@ describe("PiAdapterV2", () => {
         method: "input",
         title: "Optional value",
       });
-      const event = yield* takeEvent(
+      const cancelled = yield* takeEvent(
         (event) =>
-          event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+          event.type === "runtime_request.updated" &&
+          event.runtimeRequest.status === "cancelled",
       );
       assert.isTrue(
-        event.type === "turn_item.updated" && event.turnItem.type === "user_input_request",
+        cancelled.type === "runtime_request.updated" &&
+          cancelled.runtimeRequest.nativeRequestRef?.nativeId === "ui-input",
       );
-      if (event.type !== "turn_item.updated" || event.turnItem.type !== "user_input_request")
-        return;
-      assert.equal(event.turnItem.questions[0]?.options[0]?.value, "");
-      yield* runtime.respondToRuntimeRequest({
-        requestId: event.turnItem.requestId,
-        answers: { "ui-input": "" },
-      });
       const response = yield* fake.takeRequest("extension_ui_response");
-      assert.equal(response["value"], "");
-      assert.isUndefined(response["cancelled"]);
+      assert.equal(response["id"], "ui-input");
+      assert.isTrue(response["cancelled"] === true);
+    }).pipe(Effect.scoped, Effect.provide(testLayer)),
+  );
+
+  it.effect("fails loudly for a late runtime request answer", () =>
+    Effect.gen(function* () {
+      const fake = yield* makeFakePi;
+      const { runtime, takeEvent } = yield* openRuntime(fake);
+      yield* runtime.ensureThread({
+        threadId: THREAD_ID,
+        modelSelection: modelSelection("default"),
+        runtimePolicy,
+      });
+      yield* fake.emit({
+        type: "extension_ui_request",
+        id: "ui-timeout",
+        method: "confirm",
+        title: "Deploy?",
+      });
+      const pending = yield* takeEvent(
+        (event) =>
+          event.type === "runtime_request.updated" && event.runtimeRequest.status === "pending",
+      );
+      const requestId =
+        pending.type === "runtime_request.updated" ? pending.runtimeRequest.id : undefined;
+      yield* runtime.respondToRuntimeRequest({ requestId: requestId!, decision: "accept" });
+      // Pi's own UI timeout retires the request on its side; a duplicate
+      // answer that arrives afterwards finds no pending request and must
+      // surface a typed error instead of resolving silently.
+      const error = yield* Effect.flip(
+        runtime.respondToRuntimeRequest({ requestId: requestId!, decision: "accept" }),
+      );
+      assert.equal(error._tag, "ProviderAdapterRuntimeRequestResponseError");
     }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 

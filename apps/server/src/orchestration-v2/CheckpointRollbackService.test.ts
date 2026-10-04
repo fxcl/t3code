@@ -3,7 +3,9 @@ import { assert, it, vi } from "@effect/vitest";
 import {
   CheckpointId,
   CheckpointScopeId,
+  type OrchestrationV2ProviderTurn,
   type OrchestrationV2ThreadProjection,
+  ProviderDriverKind,
   ProviderInstanceId,
   ProviderSessionId,
   ProviderThreadId,
@@ -16,7 +18,6 @@ import * as Option from "effect/Option";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import * as Layer from "effect/Layer";
 
-import { resolveCodexRollbackTurnCount } from "./Adapters/CodexAdapterV2.ts";
 import { isCheckpointRestoreIsolated } from "./CheckpointRestoreSafety.ts";
 import * as CheckpointService from "./CheckpointService.ts";
 import * as CheckpointRollbackService from "./CheckpointRollbackService.ts";
@@ -24,9 +25,31 @@ import * as EventSink from "./EventSink.ts";
 import * as IdAllocator from "./IdAllocator.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
 import * as ProjectStore from "./ProjectStore.ts";
-import type { ProviderAdapterV2RollbackThreadInput } from "./ProviderAdapter.ts";
+import {
+  ProviderAdapterRollbackThreadError,
+  type ProviderAdapterV2RollbackThreadInput,
+} from "./ProviderAdapter.ts";
 import * as ProviderSessionManager from "./ProviderSessionManager.ts";
 import * as RuntimePolicy from "./RuntimePolicy.ts";
+
+/**
+ * Terminal-turn boundary semantics the rollback service's assertions rely on,
+ * inlined from the removed Codex adapter. A rollback to a target reverts every
+ * terminal turn after the boundary ordinal (or all terminal turns when rolling
+ * back to thread start).
+ */
+const isTerminalProviderTurn = (turn: OrchestrationV2ProviderTurn): boolean =>
+  turn.status === "completed" ||
+  turn.status === "interrupted" ||
+  turn.status === "failed" ||
+  turn.status === "cancelled";
+
+const resolveRollbackTurnCount = (input: ProviderAdapterV2RollbackThreadInput): number => {
+  const terminalTurns = input.providerThreadTurns.filter(isTerminalProviderTurn);
+  if (input.target.type === "thread_start") return terminalTurns.length;
+  const boundaryOrdinal = input.target.providerTurn.ordinal;
+  return terminalTurns.filter((turn) => turn.ordinal > boundaryOrdinal).length;
+};
 
 // A root that does not exist never overlaps, so other owners decide isolation.
 const unrelatedProject = Option.some({
@@ -440,7 +463,7 @@ it.effect.each([
             Effect.succeed({
               rollbackThread: (input: ProviderAdapterV2RollbackThreadInput) =>
                 Effect.gen(function* () {
-                  const count = yield* resolveCodexRollbackTurnCount(input);
+                  const count = resolveRollbackTurnCount(input);
                   assert.equal(count, 2 - targetOrdinal);
                   calls.push("provider");
                   return { providerThread };
@@ -468,6 +491,122 @@ it.effect.each([
     );
   }).pipe(Effect.provide(testLayer));
 });
+
+it.effect(
+  "surfaces a Pi rollback refusal as a visible typed failure instead of a silent no-op",
+  () => {
+    const threadId = ThreadId.make("rewind-refusal");
+    const providerThreadId = ProviderThreadId.make("rewind-refusal-provider");
+    const providerSessionId = ProviderSessionId.make("rewind-refusal-session");
+    const instanceId = ProviderInstanceId.make("rewind-refusal-instance");
+    const checkpointId = CheckpointId.make("rewind-refusal-start");
+    const scopeId = CheckpointScopeId.make("rewind-refusal-scope");
+    const calls: string[] = [];
+    const providerThread = {
+      id: providerThreadId,
+      providerSessionId,
+      providerInstanceId: instanceId,
+    };
+    const projection = {
+      thread: {
+        worktreePath: null,
+        activeProviderThreadId: providerThreadId,
+        modelSelection: { instanceId, model: "test" },
+      },
+      providerThreads: [providerThread],
+      providerSessions: [],
+      providerTurns: [1, 2].map((ordinal) => ({
+        id: `turn-${ordinal}`,
+        providerThreadId,
+        runAttemptId: `attempt-${ordinal}`,
+        ordinal,
+        status: "completed",
+      })),
+      nodes: [],
+      attempts: [1, 2].map((ordinal) => ({ id: `attempt-${ordinal}`, runId: `run-${ordinal}` })),
+      checkpoints: [{ id: checkpointId, scopeId, status: "ready", appRunOrdinal: null }],
+      checkpointScopes: [{ id: scopeId, cwd: process.cwd() }],
+      runs: [1, 2].map((ordinal) => ({
+        id: `run-${ordinal}`,
+        ordinal,
+        status: "completed",
+        rootNodeId: null,
+        activeAttemptId: `attempt-${ordinal}`,
+      })),
+    } as unknown as OrchestrationV2ThreadProjection;
+    const testLayer = checkpointRollbackServiceLayer.pipe(
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(CheckpointService.CheckpointServiceV2)({
+            restore: () =>
+              Effect.sync(() => {
+                calls.push("files");
+              }),
+          }),
+          Layer.mock(EventSink.EventSinkV2)({
+            write: ({ events }) =>
+              Effect.sync(() => {
+                void events;
+                calls.push("projection");
+                return [];
+              }),
+          }),
+          IdAllocator.layer,
+          Layer.mock(ProjectionStore.ProjectionStoreV2)({
+            getThreadRecords: () => Effect.succeed(projection),
+            getThreadProviderContext: () => Effect.succeed({ providerSessions: [] } as never),
+            getCheckpointContext: () =>
+              Effect.succeed({
+                checkpointScopes: [{ cwd: process.cwd() }],
+                runs: [],
+                checkpoints: [],
+              } as never),
+            getShellSnapshot: () =>
+              Effect.succeed({
+                schemaVersion: 1,
+                snapshotSequence: 0,
+                threads: [],
+                archivedThreads: [],
+              }),
+          }),
+          Layer.mock(ProviderSessionManager.ProviderSessionManagerV2)({
+            open: () =>
+              Effect.succeed({
+                rollbackThread: () =>
+                  Effect.fail(
+                    new ProviderAdapterRollbackThreadError({
+                      driver: ProviderDriverKind.make("pi"),
+                      providerThreadId,
+                      checkpointId,
+                      cause: "A Pi extension cancelled the session fork",
+                    }),
+                  ),
+              } as never),
+          }),
+          Layer.mock(RuntimePolicy.RuntimePolicyV2)({ resolve: () => Effect.succeed({} as never) }),
+        ),
+      ),
+    );
+    return Effect.gen(function* () {
+      const service = yield* CheckpointRollbackService.CheckpointRollbackServiceV2;
+      const error = yield* Effect.flip(
+        service.execute({
+          threadId,
+          providerThreadId,
+          checkpointId,
+          scopeId,
+          restoreFiles: false,
+        }),
+      );
+      assert.equal(error._tag, "CheckpointRollbackExecutionError");
+      assert.equal(error.reason, "unexpected-failure");
+      assert.equal(error.message, CheckpointRollbackService.ROLLBACK_FAILED_MESSAGE);
+      // The refusal must not be swallowed: no file restore and no
+      // rolled-back projection writes may have happened.
+      assert.deepEqual(calls, []);
+    }).pipe(Effect.provide(testLayer));
+  },
+);
 
 it.effect.skipIf(!symlinksSupported)(
   "rejects an archived thread sharing a worktree through a symlink",

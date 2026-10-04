@@ -6,7 +6,7 @@ import {
   ProviderInstanceId,
 } from "@t3tools/contracts";
 
-import { AcpProviderCapabilitiesV2 } from "./Adapters/AcpAdapterV2.ts";
+import { PiProviderCapabilitiesV2 } from "./Adapters/PiAdapterV2.ts";
 import { acpSelectionTransition } from "./ProviderSelectionTransition.ts";
 
 const selection = (model: string, effort = "medium"): ModelSelection => ({
@@ -21,16 +21,16 @@ describe("acpSelectionTransition", () => {
       acpSelectionTransition({
         current: selection("old"),
         target: selection("new"),
-        sessionCapabilities: AcpProviderCapabilitiesV2,
+        sessionCapabilities: PiProviderCapabilitiesV2,
       }).type,
     ).toBe("reject");
   });
 
   it("allows model changes when the negotiated session can apply them", () => {
     const sessionCapabilities: OrchestrationV2ProviderCapabilities = {
-      ...AcpProviderCapabilitiesV2,
+      ...PiProviderCapabilitiesV2,
       sessions: {
-        ...AcpProviderCapabilitiesV2.sessions,
+        ...PiProviderCapabilitiesV2.sessions,
         supportsModelSwitchInSession: true,
       },
     };
@@ -48,7 +48,7 @@ describe("acpSelectionTransition", () => {
       acpSelectionTransition({
         current: selection("same", "medium"),
         target: selection("same", "high"),
-        sessionCapabilities: AcpProviderCapabilitiesV2,
+        sessionCapabilities: PiProviderCapabilitiesV2,
       }),
     ).toEqual({ type: "apply_on_next_turn" });
   });

@@ -47,11 +47,7 @@ import * as ServerLifecycleEvents from "./serverLifecycleEvents.ts";
 import * as AnalyticsService from "./telemetry/AnalyticsService.ts";
 import * as ProviderEventIngestor from "./orchestration-v2/ProviderEventIngestor.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
-import * as ResetCreditCoordinator from "./provider/Layers/resetCreditCoordinator.ts";
 import * as ProviderEventLoggers from "./provider/Layers/ProviderEventLoggers.ts";
-import * as OpenCodeRuntime from "./provider/opencodeRuntime.ts";
-import * as OpenCodeServerLedger from "./provider/OpenCodeServerLedger.ts";
-import { AcpRegistryCatalogLive } from "./provider/Layers/AcpRegistryCatalog.ts";
 import * as CheckpointDiffQuery from "./checkpointing/CheckpointDiffQuery.ts";
 import * as CheckpointStore from "./checkpointing/CheckpointStore.ts";
 import * as AzureDevOpsCli from "./sourceControl/AzureDevOpsCli.ts";
@@ -80,8 +76,6 @@ import { ProviderRegistryLive } from "./provider/Layers/ProviderRegistry.ts";
 import * as ServerSettings from "./serverSettings.ts";
 import * as ProjectEnrichmentService from "./project/ProjectEnrichmentService.ts";
 import * as NativeAppIconResolver from "./assets/NativeAppIconResolver.ts";
-import * as AntigravityInstallation from "./provider/AntigravityInstallation.ts";
-import * as CodexInstallation from "./provider/CodexInstallation.ts";
 import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
 import * as ProviderAdapterRegistry from "./orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
@@ -472,38 +466,6 @@ const ThreadPullRequestWorkerLive = Layer.effectDiscard(
   ThreadPullRequestService.make.pipe(Effect.flatMap((service) => service.start())),
 ).pipe(Layer.provide(PullRequestServiceLive));
 
-const ProviderInstallationRefreshLive = Layer.effectDiscard(
-  Effect.gen(function* () {
-    const antigravity = yield* AntigravityInstallation.AntigravityInstallation;
-    const codex = yield* CodexInstallation.CodexInstallation;
-    const instances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
-    const providers = yield* ProviderRegistry.ProviderRegistry;
-    yield* Stream.merge(
-      antigravity.changes.pipe(
-        Stream.changesWith((a, b) => a.installedVersion === b.installedVersion),
-        Stream.drop(1),
-      ),
-      codex.changes.pipe(
-        Stream.changesWith((a, b) => a.installedVersion === b.installedVersion),
-        Stream.drop(1),
-      ),
-    ).pipe(
-      Stream.runForEach((state) =>
-        instances.listInstances.pipe(
-          Effect.flatMap((entries) =>
-            Effect.forEach(
-              entries.filter((instance) => instance.driverKind === state.driver),
-              (instance) => providers.refreshInstance(instance.instanceId),
-              { discard: true },
-            ),
-          ),
-        ),
-      ),
-      Effect.forkScoped,
-    );
-  }),
-);
-
 const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   AgentAwarenessRelay.layer,
   ThreadSettlementWorkerLive,
@@ -524,7 +486,6 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   // Subscribes to `account.rate-limits.updated` so usage bars track live
   // telemetry instead of waiting for the next status probe.
   ProviderUsageLimitsIngestionLive,
-  ProviderInstallationRefreshLive,
   ReplayMarkers.layer,
 ).pipe(
   // Core Services
@@ -550,38 +511,18 @@ const RuntimeCoreDependenciesBaseLive = Layer.mergeAll(
   // `providerInstances` hydration merges `settings.providers.<kind>`
   // with explicit `providerInstances` entries on boot.
   Layer.provideMerge(ProviderInstanceRegistryHydrationLive),
-  Layer.provideMerge(
-    Layer.mergeAll(
-      AntigravityInstallation.AntigravityInstallation.layer,
-      CodexInstallation.CodexInstallation.layer,
-    ),
-  ),
 );
 
 const RuntimeCoreDependenciesLive = RuntimeCoreDependenciesBaseLive.pipe(
   Layer.provideMerge(PtyAdapterLive),
-  // Search, prepare, status inspection, and turn launch share one registry
-  // cache so every client and provider instance sees the same prepared agents.
-  Layer.provideMerge(AcpRegistryCatalogLive),
   // Shared native/canonical NDJSON writers used by both the per-instance
   // V2 drivers and the orchestration runtime. Provide resource attribution so
   // the rewritten telemetry pipeline can account for logical NDJSON writes.
   // Provided once at the runtime level so every consumer sees the same
   // logger instances.
   // `ModelManifest.layer` is the legacy-model classification data, refreshed
-  // from the repo's `model-manifest.json` on `main` and applied by the
-  // Codex/Claude drivers.
-  Layer.provideMerge(
-    Layer.mergeAll(ProviderEventLoggers.layer, ModelManifest.layer, ResetCreditCoordinator.layer),
-  ),
-  // `OpenCodeDriver.create()` yields `OpenCodeRuntime`; previously the old
-  // `ProviderRegistryLive` pulled `OpenCodeRuntimeLive` in for itself, but
-  // the rewritten registry reads snapshots off the instance registry and
-  // no longer transitively provides it. Exposing it at the runtime level
-  // keeps a single Live for all opencode consumers.
-  Layer.provideMerge(
-    OpenCodeRuntime.OpenCodeRuntimeLive.pipe(Layer.provide(OpenCodeServerLedger.layer)),
-  ),
+  // from the repo's `model-manifest.json` on `main`.
+  Layer.provideMerge(Layer.mergeAll(ProviderEventLoggers.layer, ModelManifest.layer)),
   Layer.provideMerge(WorkspaceLayerLive),
   Layer.provideMerge(ProjectEnrichmentService.layer),
   Layer.provideMerge(Layer.mergeAll(NativeAppIconResolver.layer, ProjectFaviconResolverLayerLive)),

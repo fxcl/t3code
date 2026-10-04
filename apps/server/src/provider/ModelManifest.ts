@@ -19,7 +19,6 @@ import {
   type ProviderDriverKind,
   type ServerProviderModel,
 } from "@t3tools/contracts";
-import { codexModelFamily } from "@t3tools/shared/model";
 import * as Clock from "effect/Clock";
 import * as Context from "effect/Context";
 import * as Effect from "effect/Effect";
@@ -32,7 +31,6 @@ import { HttpClient, HttpClientResponse } from "effect/unstable/http";
 
 import { ServerConfig } from "../config.ts";
 import * as ServerSettings from "../serverSettings.ts";
-import { hasValidClaudeManifestAdapters } from "./ClaudeModelManifest.ts";
 import bundledManifestJson from "./model-manifest.json" with { type: "json" };
 import { ProviderCompatibilityPolicy } from "./providerCompatibility.ts";
 import type { ServerProviderDraft } from "./providerSnapshot.ts";
@@ -114,9 +112,6 @@ const ModelManifestSchema = ModelManifestEnvelopeSchema.pipe(
   Schema.check(
     Schema.makeFilter(hasValidProviderCatalogReferences, {
       expected: "unique model slugs and existing model and profile references",
-    }),
-    Schema.makeFilter(hasValidClaudeManifestAdapters, {
-      expected: "valid Claude adapter metadata",
     }),
   ),
 );
@@ -215,15 +210,12 @@ function isLegacyModel(
   driverKind: ProviderDriverKind,
   slug: string,
 ): boolean {
-  const family = driverKind === "codex" ? codexModelFamily(slug) : slug;
   const catalog = manifest.providers?.[driverKind]?.models;
-  const catalogModel =
-    catalog?.find((model) => model.slug === slug) ??
-    catalog?.find((model) => model.slug === family);
+  const catalogModel = catalog?.find((model) => model.slug === slug);
   if (catalogModel) return catalogModel.status === "legacy";
   const currentModels = manifest.currentModels[driverKind];
   if (!currentModels) return false;
-  return !currentModels.includes(slug) && !currentModels.includes(family);
+  return !currentModels.includes(slug);
 }
 
 /**
@@ -255,10 +247,9 @@ export function manifestDefaultModel(
 
 /**
  * Moves `isDefault` to the manifest's chat default when the catalog carries
- * it. Providers that learn their default from the runtime (Antigravity takes
- * Google's current model) can be overridden here without a release. Aliases
- * that pointed at the old default move with the flag so the shared
- * "provider default" alias keeps resolving.
+ * it. Providers that learn their default from the runtime can be overridden
+ * here without a release. Aliases that pointed at the old default move with
+ * the flag so the shared "provider default" alias keeps resolving.
  */
 export function applyManifestDefault(
   models: ReadonlyArray<ServerProviderModel>,
@@ -267,14 +258,7 @@ export function applyManifestDefault(
 ): ReadonlyArray<ServerProviderModel> {
   const requestedSlug = manifestDefaultModel(manifest, driverKind);
   if (requestedSlug === undefined) return models;
-  const slug =
-    models.find((model) => model.slug === requestedSlug)?.slug ??
-    (driverKind === "codex"
-      ? models.find(
-          (model) =>
-            !model.isCustom && codexModelFamily(model.slug) === codexModelFamily(requestedSlug),
-        )?.slug
-      : undefined);
+  const slug = models.find((model) => model.slug === requestedSlug)?.slug;
   if (slug === undefined) return models;
   const previous = models.find((model) => model.isDefault && model.slug !== slug);
   if (!previous) return models;

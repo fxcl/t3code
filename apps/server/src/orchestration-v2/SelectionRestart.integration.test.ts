@@ -24,7 +24,7 @@ import * as Queue from "effect/Queue";
 import * as Ref from "effect/Ref";
 import * as Stream from "effect/Stream";
 
-import { CodexProviderCapabilitiesV2 } from "./Adapters/CodexAdapterV2.ts";
+import { PiProviderCapabilitiesV2 } from "./Adapters/PiAdapterV2.ts";
 import * as EffectWorker from "./EffectWorker.ts";
 import * as EventSink from "./EventSink.ts";
 import * as Orchestrator from "./Orchestrator.ts";
@@ -58,11 +58,11 @@ const handoffSelection = {
   instanceId: handoffProviderInstanceId,
   model: "handoff-model",
 } satisfies ModelSelection;
-const pooledCapabilities: OrchestrationV2ProviderCapabilities = CodexProviderCapabilitiesV2;
+const pooledCapabilities: OrchestrationV2ProviderCapabilities = PiProviderCapabilitiesV2;
 const exclusiveCapabilities: OrchestrationV2ProviderCapabilities = {
-  ...CodexProviderCapabilitiesV2,
+  ...PiProviderCapabilitiesV2,
   sessions: {
-    ...CodexProviderCapabilitiesV2.sessions,
+    ...PiProviderCapabilitiesV2.sessions,
     supportsMultipleProviderThreadsPerSession: false,
     supportsModelSwitchInSession: false,
   },

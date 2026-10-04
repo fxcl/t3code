@@ -1,7 +1,10 @@
-import { OrchestrationDispatchCommandError } from "@t3tools/contracts";
+import {
+  OrchestrationDispatchCommandError,
+  PI_NATIVE_WS_METHODS,
+  PiNativeError,
+} from "@t3tools/contracts";
 import * as Crypto from "effect/Crypto";
 import * as Orchestrator from "./orchestration-v2/Orchestrator.ts";
-import * as NodeCrypto from "node:crypto";
 
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -19,8 +22,6 @@ import * as Schema from "effect/Schema";
 import * as Result from "effect/Result";
 import * as Stream from "effect/Stream";
 import { rpcInitialItems } from "./rpcInitialItems.ts";
-import { subscribeChatGptHandoff } from "./provider/CodexChatGptHandoff.ts";
-import { subscribeCodexAuthCallback } from "./provider/CodexAuthCallback.ts";
 import {
   DEFAULT_AUTOMATIC_GIT_FETCH_INTERVAL,
   AcpRegistryOperationError,
@@ -42,12 +43,6 @@ import {
   type GitActionProgressEvent,
   type GitManagerServiceError,
   type MessageId,
-  type AcpRegistryImportSessionInput,
-  type AcpRegistryDeleteSessionInput,
-  type AcpRegistryDisableProviderInput,
-  type AcpRegistryListProvidersInput,
-  type AcpRegistryListSessionsInput,
-  type AcpRegistrySetProviderInput,
   OrchestrationGetFullThreadDiffError,
   OrchestrationSearchThreadsError,
   OrchestrationGetTurnDiffError,
@@ -85,9 +80,7 @@ import {
   PersistChatAttachmentsError,
   RpcClientId,
   EnvironmentAuthorizationError,
-  type ProjectId,
-  type ProviderDriverKind,
-  type ProviderInstanceId,
+  AgentSessionScanError,
   ThreadId,
   type TerminalAttachStreamEvent,
   type TerminalError,
@@ -113,9 +106,12 @@ import * as Keybindings from "./keybindings.ts";
 import * as ExternalLauncher from "./process/externalLauncher.ts";
 import * as ThreadManagementService from "./orchestration-v2/ThreadManagementService.ts";
 import * as ProviderSessionManager from "./orchestration-v2/ProviderSessionManager.ts";
+import type {
+  ProviderAdapterV2Error,
+  ProviderAdapterV2SessionRuntime,
+} from "./orchestration-v2/ProviderAdapter.ts";
 import * as ThreadLaunchService from "./orchestration-v2/ThreadLaunchService.ts";
 import * as ThreadMessageIntake from "./orchestration-v2/ThreadMessageIntake.ts";
-import * as IdAllocator from "./orchestration-v2/IdAllocator.ts";
 import * as ScheduledTasks from "./scheduledTasks/ScheduledTaskService.ts";
 import {
   archivedShellStreamItemFromThreadShell,
@@ -161,8 +157,6 @@ import {
 } from "./observability/RpcInstrumentation.ts";
 import * as ProviderRegistry from "./provider/Services/ProviderRegistry.ts";
 import * as ProviderInstanceRegistry from "./provider/Services/ProviderInstanceRegistry.ts";
-import * as AcpRegistrySupport from "./provider/acp/AcpRegistrySupport.ts";
-import * as AcpRegistryRuntimeCoordinator from "./provider/acp/AcpRegistryRuntimeCoordinator.ts";
 import * as ModelManifest from "./provider/ModelManifest.ts";
 import * as ProviderMaintenance from "./provider/providerMaintenance.ts";
 import * as ProviderMaintenanceRunner from "./provider/providerMaintenanceRunner.ts";
@@ -178,7 +172,7 @@ import * as PreviewAutomationBroker from "./mcp/PreviewAutomationBroker.ts";
 import * as DeviceService from "./device/DeviceService.ts";
 import { remoteSshDeviceHosts } from "./device/localSshDeviceHost.ts";
 import * as PreviewManager from "./preview/Manager.ts";
-import { issueAssetUrl } from "./assets/AssetAccess.ts";
+import { issueAssetUrl, issuePiExportAssetUrl } from "./assets/AssetAccess.ts";
 import { attachmentRelativePath, createDeterministicAttachmentId } from "./attachmentStore.ts";
 import { parseBase64DataUrl } from "./imageMime.ts";
 import { deletePendingAttachment, issueAttachmentUploadUrl } from "./assets/AttachmentUpload.ts";
@@ -237,8 +231,6 @@ import {
   sameUsageLimitCommandCoverage,
   withUsageLimitsCommands,
 } from "@t3tools/shared/usageLimits";
-import * as AgentSessionScanner from "./project/AgentSessionScanner.ts";
-import * as AgentSessionImporter from "./project/AgentSessionImporter.ts";
 import * as UsageLimitSources from "./usage/UsageLimitSources.ts";
 
 const CONFIG_DISCOVERY_TIMEOUT = Duration.seconds(5);
@@ -1118,8 +1110,6 @@ const makeWsRpcLayer = (
             return Effect.void;
         }
       };
-      const threadLaunch = yield* ThreadLaunchService.ThreadLaunchService;
-      const providerSessionManager = yield* ProviderSessionManager.ProviderSessionManagerV2;
       const scheduledTasks = yield* ScheduledTasks.ScheduledTaskService;
       const pullRequests = yield* PullRequestService.PullRequestService;
       const pullRequestSync = yield* PullRequestSyncReactor.PullRequestSyncReactor;
@@ -1149,8 +1139,6 @@ const makeWsRpcLayer = (
       const projectCloneTracker = yield* ProjectCloneTracker.ProjectCloneTracker;
       const repositoryIdentityResolver =
         yield* RepositoryIdentityResolver.RepositoryIdentityResolver;
-      const agentSessionScanner = yield* AgentSessionScanner.AgentSessionScanner;
-      const agentSessionImporter = yield* AgentSessionImporter.AgentSessionImporter;
       const checkpointDiffQuery = yield* CheckpointDiffQuery.CheckpointDiffQuery;
       const keybindings = yield* Keybindings.Keybindings;
       const environmentTheme = yield* EnvironmentTheme.EnvironmentThemeService;
@@ -1167,9 +1155,6 @@ const makeWsRpcLayer = (
       const modelManifest = yield* ModelManifest.ModelManifest;
       const providerVersionCache = yield* ProviderMaintenance.ProviderVersionCache;
       const providerInstances = yield* ProviderInstanceRegistry.ProviderInstanceRegistry;
-      const acpRegistryCatalog = yield* AcpRegistrySupport.AcpRegistryCatalog;
-      const acpRegistryRuntimeCoordinator =
-        yield* AcpRegistryRuntimeCoordinator.AcpRegistryRuntimeCoordinator;
       const providerMaintenanceRunner = yield* ProviderMaintenanceRunner.ProviderMaintenanceRunner;
       const providerAuth = yield* ProviderAuthService.ProviderAuthService;
       const providerInstallation = yield* makeProviderInstallation();
@@ -1239,326 +1224,13 @@ const makeWsRpcLayer = (
           ? stream
           : Stream.fail(authorizationError(requiredScope));
 
-      const acpRegistryProject = Effect.fn("ws.acpRegistry.project")(function* (
-        projectId: ProjectId,
-      ) {
-        const project = yield* projectService.getById(projectId).pipe(
-          Effect.mapError(
-            (cause) =>
-              new AcpRegistryOperationError({
-                reason: "project_not_found",
-                message: `Project ${projectId} is unavailable.`,
-                cause,
-              }),
-          ),
-        );
-        return yield* Option.match(project, {
-          onNone: () =>
-            Effect.fail(
-              new AcpRegistryOperationError({
-                reason: "project_not_found",
-                message: `Project ${projectId} was not found.`,
-              }),
-            ),
-          onSome: Effect.succeed,
-        });
-      });
-
-      const acpSessionManager = Effect.fn("ws.acpRegistry.sessionManager")(function* (
-        instanceId: ProviderInstanceId,
-      ) {
-        const instance = yield* providerInstances.getInstance(instanceId);
-        if (instance === undefined) {
-          return yield* new AcpRegistryOperationError({
-            reason: "instance_not_found",
-            message: `Provider instance ${instanceId} was not found.`,
-          });
-        }
-        if (instance.acpSessionManagement === undefined) {
-          return yield* new AcpRegistryOperationError({
-            reason: "session_list_unsupported",
-            message: `Provider instance ${instanceId} does not expose ACP session management.`,
-          });
-        }
-        return { instance, manager: instance.acpSessionManagement };
-      });
-
-      const importedAcpThreadId = (input: {
-        readonly driver: ProviderDriverKind;
-        readonly instanceId: ProviderInstanceId;
-        readonly sessionId: string;
-      }) =>
-        IdAllocator.deriveThreadFromProviderThread({
-          driver: input.driver,
-          providerInstanceId: input.instanceId,
-          nativeThreadId: input.sessionId,
-        });
-
-      const listAcpRegistrySessions = Effect.fn("ws.acpRegistry.listSessions")(function* (
-        input: AcpRegistryListSessionsInput,
-      ) {
-        const project = yield* acpRegistryProject(input.projectId);
-        const { instance, manager } = yield* acpSessionManager(input.instanceId);
-        const listed = yield* manager.listSessions({
-          cwd: project.workspaceRoot,
-          ...(input.cursor === undefined ? {} : { cursor: input.cursor }),
-        });
-        const sessions = yield* Effect.forEach(
-          listed.sessions,
-          (session) => {
-            const threadId = importedAcpThreadId({
-              driver: instance.driverKind,
-              instanceId: input.instanceId,
-              sessionId: session.sessionId,
-            });
-            return threadManagement.getThreadShell(threadId).pipe(
-              Effect.map((thread) => ({
-                ...session,
-                importedThreadId: thread === null ? null : threadId,
-              })),
-              Effect.mapError(
-                (cause) =>
-                  new AcpRegistryOperationError({
-                    reason: "session_import_failed",
-                    message: "Could not inspect existing imported ACP sessions.",
-                    cause,
-                  }),
-              ),
-            );
-          },
-          { concurrency: 16 },
-        );
-        return { ...listed, sessions };
-      });
-
-      const importAcpRegistrySession = Effect.fn("ws.acpRegistry.importSession")(function* (
-        input: AcpRegistryImportSessionInput,
-      ) {
-        return yield* acpRegistryRuntimeCoordinator.withSessionMutation(
-          Effect.gen(function* () {
-            yield* acpRegistryProject(input.projectId);
-            const { instance } = yield* acpSessionManager(input.instanceId);
-            const providerSnapshot = yield* instance.snapshot.getSnapshot;
-            if (
-              providerSnapshot.nativeSessions?.canLoad !== true &&
-              providerSnapshot.nativeSessions?.canResume !== true
-            ) {
-              return yield* new AcpRegistryOperationError({
-                reason: "session_resume_unsupported",
-                message: "The ACP agent cannot load or resume native sessions.",
-              });
-            }
-            const threadId = importedAcpThreadId({
-              driver: instance.driverKind,
-              instanceId: input.instanceId,
-              sessionId: input.sessionId,
-            });
-            const existing = yield* threadManagement.getThreadShell(threadId).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new AcpRegistryOperationError({
-                    reason: "session_import_failed",
-                    message: "Could not inspect the imported ACP session mapping.",
-                    cause,
-                  }),
-              ),
-            );
-            if (existing !== null) return { threadId, imported: false } as const;
-
-            const provider = (yield* providerRegistry.getProviders).find(
-              (candidate) => candidate.instanceId === input.instanceId,
-            );
-            const model =
-              provider?.models.find((candidate) => candidate.isDefault)?.slug ??
-              provider?.models[0]?.slug ??
-              "default";
-            const commandId = CommandId.make(NodeCrypto.randomUUID());
-            const launched = yield* Effect.result(
-              startup.enqueueCommand(
-                threadLaunch.launch({
-                  commandId,
-                  threadId,
-                  projectId: input.projectId,
-                  title: input.title ?? "Imported ACP session",
-                  modelSelection: { instanceId: input.instanceId, model },
-                  runtimeMode: "approval-required",
-                  interactionMode: "default",
-                  workspaceStrategy: { type: "root" },
-                  importedNativeThread: {
-                    ref: {
-                      driver: instance.driverKind,
-                      nativeId: input.sessionId,
-                      strength: "strong",
-                    },
-                    metadata: {
-                      itemIdentityVersion: 2,
-                      ...(input.title === undefined ? {} : { title: input.title }),
-                      ...(input.updatedAt === undefined ? {} : { updatedAt: input.updatedAt }),
-                    },
-                  },
-                  createdBy: "user",
-                  creationSource: "web",
-                }),
-              ),
-            );
-            if (Result.isFailure(launched)) {
-              const racedImport = yield* threadManagement.getThreadShell(threadId).pipe(
-                Effect.mapError(
-                  (cause) =>
-                    new AcpRegistryOperationError({
-                      reason: "session_import_failed",
-                      message: "Could not inspect the imported ACP session after launch failed.",
-                      cause,
-                    }),
-                ),
-              );
-              if (racedImport !== null) return { threadId, imported: false } as const;
-              return yield* new AcpRegistryOperationError({
-                reason: "session_import_failed",
-                message: "Could not create a T3 thread for the ACP session.",
-                cause: launched.failure,
-              });
-            }
-            return { threadId, imported: true } as const;
-          }),
-        );
-      });
-
-      const deleteAcpRegistrySession = Effect.fn("ws.acpRegistry.deleteSession")(function* (
-        input: AcpRegistryDeleteSessionInput,
-      ) {
-        return yield* acpRegistryRuntimeCoordinator.withSessionMutation(
-          Effect.gen(function* () {
-            const project = yield* acpRegistryProject(input.projectId);
-            const { instance, manager } = yield* acpSessionManager(input.instanceId);
-            const snapshot = yield* instance.snapshot.getSnapshot;
-            if (snapshot.nativeSessions?.canDelete !== true) {
-              return yield* new AcpRegistryOperationError({
-                reason: "session_delete_unsupported",
-                message: "The ACP agent does not advertise session deletion.",
-              });
-            }
-            const threadId = importedAcpThreadId({
-              driver: instance.driverKind,
-              instanceId: input.instanceId,
-              sessionId: input.sessionId,
-            });
-            const importedThread = yield* threadManagement.getThreadShell(threadId).pipe(
-              Effect.mapError(
-                (cause) =>
-                  new AcpRegistryOperationError({
-                    reason: "session_delete_failed",
-                    message: "Could not inspect the imported ACP session mapping.",
-                    cause,
-                  }),
-              ),
-            );
-            if (importedThread !== null) {
-              return yield* new AcpRegistryOperationError({
-                reason: "session_delete_failed",
-                message: "Delete the imported T3 thread before deleting its native ACP session.",
-              });
-            }
-            yield* manager.deleteSession({
-              cwd: project.workspaceRoot,
-              sessionId: input.sessionId,
-            });
-            return { deleted: true } as const;
-          }),
-        );
-      });
-
-      const listAcpRegistryProviders = Effect.fn("ws.acpRegistry.listProviders")(function* (
-        input: AcpRegistryListProvidersInput,
-      ) {
-        const project = yield* acpRegistryProject(input.projectId);
-        const { instance, manager } = yield* acpSessionManager(input.instanceId);
-        const snapshot = yield* instance.snapshot.getSnapshot;
-        if (snapshot.configurableProviders !== true) {
-          return yield* new AcpRegistryOperationError({
-            reason: "providers_unsupported",
-            message: "The ACP agent does not advertise provider configuration.",
-          });
-        }
-        return yield* manager.listProviders(project.workspaceRoot);
-      });
-
-      const setAcpRegistryProvider = Effect.fn("ws.acpRegistry.setProvider")(function* (
-        input: AcpRegistrySetProviderInput,
-      ) {
-        const project = yield* acpRegistryProject(input.projectId);
-        const { manager } = yield* acpSessionManager(input.instanceId);
-        if (input.headers !== undefined && Object.keys(input.headers).length > 32) {
-          return yield* new AcpRegistryOperationError({
-            reason: "provider_configuration_failed",
-            message: "ACP provider configuration accepts at most 32 headers.",
-          });
-        }
-        const listed = yield* manager.listProviders(project.workspaceRoot);
-        const provider = listed.providers.find(
-          (candidate) => candidate.providerId === input.providerId,
-        );
-        if (provider === undefined || !provider.supported.includes(input.apiType)) {
-          return yield* new AcpRegistryOperationError({
-            reason: "provider_configuration_failed",
-            message: `Provider ${input.providerId} does not support ${input.apiType}.`,
-          });
-        }
-        yield* providerSessionManager.closeInstance(input.instanceId).pipe(
-          Effect.mapError(
-            (cause) =>
-              new AcpRegistryOperationError({
-                reason: "provider_configuration_failed",
-                message: "Could not stop live sessions before updating the ACP provider.",
-                cause,
-              }),
-          ),
-        );
-        yield* manager.setProvider({
-          cwd: project.workspaceRoot,
-          providerId: input.providerId,
-          apiType: input.apiType,
-          baseUrl: input.baseUrl,
-          ...(input.headers === undefined ? {} : { headers: input.headers }),
-        });
-        yield* providerRegistry.refreshInstance(input.instanceId);
-        return { configured: true } as const;
-      });
-
-      const disableAcpRegistryProvider = Effect.fn("ws.acpRegistry.disableProvider")(function* (
-        input: AcpRegistryDisableProviderInput,
-      ) {
-        const project = yield* acpRegistryProject(input.projectId);
-        const { manager } = yield* acpSessionManager(input.instanceId);
-        const listed = yield* manager.listProviders(project.workspaceRoot);
-        const provider = listed.providers.find(
-          (candidate) => candidate.providerId === input.providerId,
-        );
-        if (provider === undefined || provider.required) {
-          return yield* new AcpRegistryOperationError({
-            reason: "provider_configuration_failed",
-            message:
-              provider === undefined
-                ? `Provider ${input.providerId} was not advertised by the ACP agent.`
-                : `Provider ${input.providerId} is required and cannot be disabled.`,
-          });
-        }
-        yield* providerSessionManager.closeInstance(input.instanceId).pipe(
-          Effect.mapError(
-            (cause) =>
-              new AcpRegistryOperationError({
-                reason: "provider_configuration_failed",
-                message: "Could not stop live sessions before disabling the ACP provider.",
-                cause,
-              }),
-          ),
-        );
-        yield* manager.disableProvider({
-          cwd: project.workspaceRoot,
-          providerId: input.providerId,
-        });
-        yield* providerRegistry.refreshInstance(input.instanceId);
-        return { disabled: true } as const;
+      // Pi-only build: the ACP registry stack (packages/effect-acp and
+      // provider/acp/) was removed. The wire contract still declares the
+      // AcpRegistry* RPC methods, so every ACP handler fails fast with a
+      // typed "registry_unavailable" error instead of crashing.
+      const acpRegistryUnavailable = new AcpRegistryOperationError({
+        reason: "registry_unavailable",
+        message: "The ACP registry is not available in this Pi-only build.",
       });
       const observeRpcEffect = <A, E, R>(
         method: string,
@@ -1604,6 +1276,53 @@ const makeWsRpcLayer = (
               new AuthAccessStreamError({
                 message: error.message,
               }),
+          ),
+        );
+
+      const toPiNativeError = (operation: string, cause: unknown) =>
+        new PiNativeError({
+          operation,
+          message: cause instanceof Error ? cause.message : String(cause),
+        });
+      // Thread resolution always comes from the RPC payload's threadId: the
+      // session manager transparently opens — and later idle-releases — the
+      // thread's Pi session with the same lifecycle the turn path uses.
+      const runPiNative = <A, R = never>(
+        operation: string,
+        threadId: ThreadId,
+        request: (
+          piNative: NonNullable<ProviderAdapterV2SessionRuntime["piNative"]>,
+        ) => Effect.Effect<A, ProviderAdapterV2Error, R>,
+      ) =>
+        providerSessionsV2.openForThreadPiNative({ threadId }).pipe(
+          // The manager's own failure modes (activity, lookup, open, release)
+          // all mean "this thread has no usable Pi session right now"; the
+          // wire contract only carries PiNativeError for this family.
+          Effect.mapError((cause) => toPiNativeError(operation, cause)),
+          Effect.flatMap(
+            Option.match({
+              onNone: () =>
+                Effect.fail(
+                  new PiNativeError({
+                    operation,
+                    message: "No Pi session is available for this thread.",
+                  }),
+                ),
+              onSome: ({ runtime }) => {
+                const piNative = runtime.piNative;
+                return piNative === undefined
+                  ? Effect.fail(
+                      new PiNativeError({
+                        operation,
+                        message:
+                          "The thread's provider does not support Pi-native operations.",
+                      }),
+                    )
+                  : request(piNative).pipe(
+                      Effect.mapError((cause) => toPiNativeError(operation, cause)),
+                    );
+              },
+            }),
           ),
         );
 
@@ -1751,6 +1470,234 @@ const makeWsRpcLayer = (
       });
 
       const handlers = ServerWsRpcGroup.of({
+        // ── Pi-native session operations (`piNative.*`) ─────────────
+        [PI_NATIVE_WS_METHODS.getTree]: ({ threadId }) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.getTree,
+            runPiNative("getTree", threadId, (piNative) =>
+              piNative.withSessionLock(threadId, piNative.getSessionTree(threadId)),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.navigateTree]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.navigateTree,
+            runPiNative("navigateTree", input.threadId, (piNative) =>
+              piNative.withSessionLock(input.threadId, piNative.navigateSessionTree(input)),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.abortBranchSummary]: ({ threadId }) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.abortBranchSummary,
+            runPiNative("abortBranchSummary", threadId, (piNative) =>
+              piNative.abortBranchSummary(threadId),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.setEntryLabel]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.setEntryLabel,
+            runPiNative("setEntryLabel", input.threadId, (piNative) =>
+              piNative.withSessionLock(input.threadId, piNative.setEntryLabel(input)),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.reload]: ({ threadId }) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.reload,
+            runPiNative("reload", threadId, (piNative) => piNative.reloadResources(threadId)),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.compact]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.compact,
+            runPiNative("compact", input.threadId, (piNative) =>
+              piNative.compactSession(input),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.getStateAndStats]: ({ threadId }) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.getStateAndStats,
+            runPiNative("getStateAndStats", threadId, (piNative) =>
+              piNative.getSessionStateAndStats(threadId),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.setSessionName]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.setSessionName,
+            runPiNative("setSessionName", input.threadId, (piNative) =>
+              piNative.withSessionLock(input.threadId, piNative.setSessionName(input)),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.getLastAssistantText]: ({ threadId }) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.getLastAssistantText,
+            runPiNative("getLastAssistantText", threadId, (piNative) =>
+              piNative.getLastAssistantText(threadId),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.exportHtml]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.exportHtml,
+            runPiNative("exportHtml", input.threadId, (piNative) =>
+              piNative.exportSessionHtml(input),
+            ).pipe(
+              // The export artifact is served through the asset route; every
+              // issuance failure joins the family's PiNativeError channel.
+              Effect.flatMap(issuePiExportAssetUrl),
+              Effect.mapError((cause) => toPiNativeError("exportHtml", cause)),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.getSettings]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.getSettings,
+            runPiNative("getSettings", input.threadId, (piNative) =>
+              piNative.getSettings(input),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.updateSettings]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.updateSettings,
+            runPiNative("updateSettings", input.threadId, (piNative) =>
+              piNative.withSessionLock(input.threadId, piNative.updateSettings(input)),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.getScopedModels]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.getScopedModels,
+            runPiNative("getScopedModels", input.threadId, (piNative) =>
+              piNative.getScopedModels(input),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.updateScopedModels]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.updateScopedModels,
+            runPiNative("updateScopedModels", input.threadId, (piNative) =>
+              piNative.withSessionLock(input.threadId, piNative.updateScopedModels(input)),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.listResumeSessions]: ({ threadId }) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.listResumeSessions,
+            runPiNative("listResumeSessions", threadId, (piNative) =>
+              piNative.listResumeSessions(threadId),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.resume]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.resume,
+            runPiNative("resume", input.threadId, (piNative) =>
+              piNative.withSessionLock(input.threadId, piNative.resumeSession(input)),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.importSession]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.importSession,
+            runPiNative("import", input.threadId, (piNative) =>
+              piNative.withSessionLock(input.threadId, piNative.importSession(input)),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.fork]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.fork,
+            runPiNative("fork", input.threadId, (piNative) =>
+              piNative.withSessionLock(input.threadId, piNative.forkSession(input)),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.clone]: ({ threadId }) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.clone,
+            runPiNative("clone", threadId, (piNative) =>
+              piNative.withSessionLock(threadId, piNative.cloneSession(threadId)),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.getTrust]: ({ threadId }) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.getTrust,
+            runPiNative("getTrust", threadId, (piNative) => piNative.getTrust(threadId)),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.setTrust]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.setTrust,
+            runPiNative("setTrust", input.threadId, (piNative) =>
+              piNative.withSessionLock(input.threadId, piNative.setTrust(input)),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.getChangelog]: ({ threadId }) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.getChangelog,
+            runPiNative("getChangelog", threadId, (piNative) => piNative.getChangelog(threadId)),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.getAuthState]: ({ threadId }) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.getAuthState,
+            runPiNative("getAuthState", threadId, (piNative) => piNative.getAuthState(threadId)),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.beginAuthLogin]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.beginAuthLogin,
+            runPiNative("beginAuthLogin", input.threadId, (piNative) =>
+              piNative.beginAuthLogin(input),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.getAuthFlow]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.getAuthFlow,
+            runPiNative("getAuthFlow", input.threadId, (piNative) => piNative.getAuthFlow(input)),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.respondAuthFlow]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.respondAuthFlow,
+            runPiNative("respondAuthFlow", input.threadId, (piNative) =>
+              piNative.respondAuthFlow(input),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.cancelAuthFlow]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.cancelAuthFlow,
+            runPiNative("cancelAuthFlow", input.threadId, (piNative) =>
+              piNative.cancelAuthFlow(input),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.logout]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.logout,
+            runPiNative("logout", input.threadId, (piNative) =>
+              piNative.withSessionLock(input.threadId, piNative.logoutAuth(input)),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
+        [PI_NATIVE_WS_METHODS.share]: (input) =>
+          observeRpcEffect(
+            PI_NATIVE_WS_METHODS.share,
+            runPiNative("share", input.threadId, (piNative) =>
+              piNative.withSessionLock(input.threadId, piNative.shareSession(input)),
+            ),
+            { "rpc.aggregate": "pi-native" },
+          ),
         [ORCHESTRATION_V2_WS_METHODS.dispatchCommand]: (command) =>
           observeRpcEffect(
             ORCHESTRATION_V2_WS_METHODS.dispatchCommand,
@@ -2029,20 +1976,19 @@ const makeWsRpcLayer = (
               "rpc.aggregate": "server",
             },
           ),
-        [WS_METHODS.serverSearchAcpRegistry]: (input) =>
+        // Pi-only build: the ACP registry stack was removed (see
+        // `acpRegistryUnavailable` above). Handlers fail fast with the typed
+        // error every AcpRegistry* RPC declares.
+        [WS_METHODS.serverSearchAcpRegistry]: (_input) =>
           observeRpcEffect(
             WS_METHODS.serverSearchAcpRegistry,
-            acpRegistryCatalog
-              .search(input)
-              .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError)),
+            Effect.fail(acpRegistryUnavailable),
             { "rpc.aggregate": "server" },
           ),
         [WS_METHODS.serverPrepareAcpRegistryAgent]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverPrepareAcpRegistryAgent,
-            acpRegistryCatalog
-              .prepare(input)
-              .pipe(Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError)),
+            Effect.fail(acpRegistryUnavailable),
             {
               "rpc.aggregate": "server",
               "acp_registry.agent_id": input.agentId,
@@ -2051,36 +1997,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverUninstallAcpRegistryManagedBinary]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverUninstallAcpRegistryManagedBinary,
-            serverSettings
-              .withSettingsSnapshot((settings) =>
-                acpRegistryCatalog.uninstallManagedBinary(
-                  input,
-                  Effect.succeed(
-                    Object.values(settings.providerInstances).some((instance) => {
-                      if (
-                        instance.driver !== "acpRegistry" ||
-                        instance.config === null ||
-                        typeof instance.config !== "object"
-                      ) {
-                        return false;
-                      }
-                      return (instance.config as Record<string, unknown>).agentId === input.agentId;
-                    }),
-                  ),
-                ),
-              )
-              .pipe(
-                Effect.mapError((cause) =>
-                  AcpRegistrySupport.isAcpRegistryError(cause)
-                    ? cause
-                    : new AcpRegistrySupport.AcpRegistryError({
-                        reason: "install_failed",
-                        detail: `Could not read provider settings while checking references for ACP Registry agent ${input.agentId}.`,
-                        cause,
-                      }),
-                ),
-                Effect.mapError(AcpRegistrySupport.toAcpRegistryOperationError),
-              ),
+            Effect.fail(acpRegistryUnavailable),
             {
               "rpc.aggregate": "server",
               "acp_registry.agent_id": input.agentId,
@@ -2089,9 +2006,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverAcceptAcpRegistryUrlAuth]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverAcceptAcpRegistryUrlAuth,
-            acpRegistryRuntimeCoordinator
-              .acceptUrlAuthentication(input)
-              .pipe(Effect.map((accepted) => ({ accepted }))),
+            Effect.succeed({ accepted: false }),
             {
               "rpc.aggregate": "server",
               "provider.instance_id": input.instanceId,
@@ -2100,7 +2015,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverListAcpRegistrySessions]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverListAcpRegistrySessions,
-            listAcpRegistrySessions(input),
+            Effect.fail(acpRegistryUnavailable),
             {
               "rpc.aggregate": "server",
               "provider.instance_id": input.instanceId,
@@ -2110,7 +2025,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverImportAcpRegistrySession]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverImportAcpRegistrySession,
-            importAcpRegistrySession(input),
+            Effect.fail(acpRegistryUnavailable),
             {
               "rpc.aggregate": "server",
               "provider.instance_id": input.instanceId,
@@ -2120,7 +2035,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverDeleteAcpRegistrySession]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverDeleteAcpRegistrySession,
-            deleteAcpRegistrySession(input),
+            Effect.fail(acpRegistryUnavailable),
             {
               "rpc.aggregate": "server",
               "provider.instance_id": input.instanceId,
@@ -2130,7 +2045,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverListAcpRegistryProviders]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverListAcpRegistryProviders,
-            listAcpRegistryProviders(input),
+            Effect.fail(acpRegistryUnavailable),
             {
               "rpc.aggregate": "server",
               "provider.instance_id": input.instanceId,
@@ -2138,15 +2053,19 @@ const makeWsRpcLayer = (
             },
           ),
         [WS_METHODS.serverSetAcpRegistryProvider]: (input) =>
-          observeRpcEffect(WS_METHODS.serverSetAcpRegistryProvider, setAcpRegistryProvider(input), {
-            "rpc.aggregate": "server",
-            "provider.instance_id": input.instanceId,
-            "project.id": input.projectId,
-          }),
+          observeRpcEffect(
+            WS_METHODS.serverSetAcpRegistryProvider,
+            Effect.fail(acpRegistryUnavailable),
+            {
+              "rpc.aggregate": "server",
+              "provider.instance_id": input.instanceId,
+              "project.id": input.projectId,
+            },
+          ),
         [WS_METHODS.serverDisableAcpRegistryProvider]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverDisableAcpRegistryProvider,
-            disableAcpRegistryProvider(input),
+            Effect.fail(acpRegistryUnavailable),
             {
               "rpc.aggregate": "server",
               "provider.instance_id": input.instanceId,
@@ -2156,42 +2075,7 @@ const makeWsRpcLayer = (
         [WS_METHODS.serverLogoutAcpRegistry]: (input) =>
           observeRpcEffect(
             WS_METHODS.serverLogoutAcpRegistry,
-            Effect.gen(function* () {
-              const { instance, manager } = yield* acpSessionManager(input.instanceId);
-              const snapshot = yield* instance.snapshot.getSnapshot;
-              if (snapshot.auth.canLogout !== true) {
-                return yield* new AcpRegistryOperationError({
-                  reason: "logout_unsupported",
-                  message: "The ACP agent does not advertise logout.",
-                });
-              }
-              if (instance.auth) {
-                yield* providerAuth.logout(input).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new AcpRegistryOperationError({
-                        reason: "logout_failed",
-                        message: "Could not sign out of the ACP agent.",
-                        cause,
-                      }),
-                  ),
-                );
-              } else {
-                yield* providerSessionManager.closeInstance(input.instanceId).pipe(
-                  Effect.mapError(
-                    (cause) =>
-                      new AcpRegistryOperationError({
-                        reason: "logout_failed",
-                        message: "Could not stop live sessions before ACP logout.",
-                        cause,
-                      }),
-                  ),
-                );
-                yield* manager.logout(config.cwd);
-              }
-              yield* providerRegistry.refreshInstance(input.instanceId);
-              return { loggedOut: true } as const;
-            }),
+            Effect.fail(acpRegistryUnavailable),
             {
               "rpc.aggregate": "server",
               "provider.instance_id": input.instanceId,
@@ -2391,11 +2275,23 @@ const makeWsRpcLayer = (
         [WS_METHODS.chatGptReconnectProfile]: (input) => providerAuth.reconnectProfile(input),
         [WS_METHODS.chatGptImportProfile]: (input) => providerAuth.importProfile(input),
         [WS_METHODS.chatGptHandoffSubscribe]: (input) =>
-          subscribeChatGptHandoff(input, currentSessionId),
+          Stream.fail(
+            new ProviderSetupError({
+              instanceId: input.instanceId,
+              operation: "chatgpt-handoff",
+              detail: "ChatGPT handoff is not available in this Pi-only build.",
+            }),
+          ),
         [WS_METHODS.codexAuthCallbackSubscribe]: (input) =>
           observeRpcStream(
             WS_METHODS.codexAuthCallbackSubscribe,
-            subscribeCodexAuthCallback(input),
+            Stream.fail(
+              new ProviderSetupError({
+                instanceId: input.instanceId,
+                operation: "codex-auth-callback",
+                detail: "Codex auth callbacks are not available in this Pi-only build.",
+              }),
+            ),
             {
               "rpc.aggregate": "provider",
             },
@@ -3093,14 +2989,29 @@ const makeWsRpcLayer = (
             deletePendingAttachment(input.attachmentId),
             { "rpc.aggregate": "workspace" },
           ),
+        // Pi-only build: the Claude/Codex session-scan importers were removed
+        // with their drivers. The wire contract keeps the methods; both fail
+        // fast with the scan error the contract declares.
         [WS_METHODS.agentSessionsScan]: () =>
-          observeRpcEffect(WS_METHODS.agentSessionsScan, agentSessionScanner.scan, {
-            "rpc.aggregate": "workspace",
-          }),
-        [WS_METHODS.agentSessionsImport]: (input) =>
+          observeRpcEffect(
+            WS_METHODS.agentSessionsScan,
+            Effect.fail(
+              new AgentSessionScanError({
+                operation: "read-settings",
+                cause: "Agent session scan is not available in this Pi-only build.",
+              }),
+            ),
+            { "rpc.aggregate": "workspace" },
+          ),
+        [WS_METHODS.agentSessionsImport]: (_input) =>
           observeRpcEffect(
             WS_METHODS.agentSessionsImport,
-            agentSessionImporter.importRecentAgentThreads(input),
+            Effect.fail(
+              new AgentSessionScanError({
+                operation: "read-settings",
+                cause: "Agent session import is not available in this Pi-only build.",
+              }),
+            ),
             { "rpc.aggregate": "workspace" },
           ),
         [WS_METHODS.assetsCreateUrl]: (input) =>
@@ -3776,7 +3687,6 @@ export const websocketRpcRouteLayer = Layer.unwrap(
             ).pipe(
               Layer.provideMerge(RpcSerialization.layerJson),
               Layer.provide(Layer.succeed(SqlClient.SqlClient, sql)),
-              Layer.provide(AgentSessionScanner.layer),
               Layer.provide(ProviderMaintenanceRunner.layer),
               Layer.provide(Layer.succeed(ServerSelfUpdate.ServerSelfUpdate, serverSelfUpdate)),
               // One server-lifetime service means clients share the same PR caches, and a WS

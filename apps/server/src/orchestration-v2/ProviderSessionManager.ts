@@ -46,6 +46,7 @@ import {
 } from "./ProviderAdapter.ts";
 import * as ProviderAdapterRegistry from "./ProviderAdapterRegistry.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
+import * as RuntimePolicy from "./RuntimePolicy.ts";
 
 const DEFAULT_IDLE_TIMEOUT_MS = 30 * 60 * 1000;
 const DEFAULT_MAX_IDLE_PIN_MS = 4 * 60 * 60 * 1000;
@@ -177,6 +178,22 @@ export interface ProviderSessionManagerV2Shape {
      */
     readonly revokeMcpCredential?: boolean;
   }) => Effect.Effect<void, ProviderSessionManagerV2Error>;
+  /**
+   * Resolves a thread's provider session through the turn path's lifecycle
+   * (reuse the attached session, otherwise open one that idle-releases like
+   * any turn-opened session) so Pi-native wire calls can reach the runtime.
+   * `None` means the thread has no provider session a native call could
+   * attach to.
+   */
+  readonly openForThreadPiNative: (input: {
+    readonly threadId: ThreadId;
+  }) => Effect.Effect<
+    Option.Option<{
+      readonly runtime: ProviderAdapterV2SessionRuntime;
+      readonly providerThread: OrchestrationV2ProviderThread;
+    }>,
+    ProviderSessionManagerV2Error
+  >;
 }
 
 export class ProviderSessionManagerV2 extends Context.Service<
@@ -317,6 +334,11 @@ export const layerWithOptions = (
        */
       const serverSettings = yield* Effect.serviceOption(ServerSettings.ServerSettingsService);
       const projectService = yield* Effect.serviceOption(ProjectService.ProjectService);
+      // Optional so hand-assembled test layers can omit it; the production
+      // composition (runtimeLayer) always provides it. openForThreadPiNative
+      // resolves a thread's runtime policy through the same service the turn
+      // path uses.
+      const runtimePolicyService = yield* Effect.serviceOption(RuntimePolicy.RuntimePolicyV2);
       const eventSink = yield* EventSink.EventSinkV2;
       const idAllocator = yield* IdAllocator.IdAllocatorV2;
       const providerEventIngestor = yield* ProviderEventIngestor.ProviderEventIngestorV2;
@@ -1479,6 +1501,17 @@ export const layerWithOptions = (
                   yield* publishToSubscribers(entry.eventSubscribers, { type: "event", event });
                 }),
               ),
+              // A single poisoned event must not take the whole pump down —
+              // that strands every later event for the session (the "stuck
+              // Working" defect). Log it once and keep draining; stream
+              // failures, interruptions and deliberate stops still propagate.
+              Effect.catchCause((cause) =>
+                Effect.logWarning("orchestration-v2.driver-session.event-processing-failed", {
+                  providerSessionId: entry.runtime.providerSessionId,
+                  eventType: event.type,
+                  cause,
+                }),
+              ),
             );
           }),
           Effect.exit,
@@ -1544,7 +1577,9 @@ export const layerWithOptions = (
       });
       yield* Effect.addFinalizer(() => shutdown);
 
-      return ProviderSessionManagerV2.of({
+      // Held in a local so openForThreadPiNative can route through the same
+      // open lifecycle after the shape below has been initialized.
+      const manager: ProviderSessionManagerV2Shape = {
         shutdown,
         open: (input) =>
           sessionOpen.withLock(
@@ -1933,7 +1968,79 @@ export const layerWithOptions = (
               ),
             ),
           ),
-      } satisfies ProviderSessionManagerV2Shape);
+        openForThreadPiNative: ({ threadId }) =>
+          Effect.gen(function* () {
+            // A projection that cannot be read has no session to route to;
+            // this mirrors detach's tolerant read.
+            const projectionOption = yield* Effect.option(
+              projectionStore.getThreadRecords(threadId, [
+                "providerThreads",
+                "providerSessions",
+                "runs",
+              ]),
+            );
+            if (Option.isNone(projectionOption)) {
+              return Option.none<{
+                runtime: ProviderAdapterV2SessionRuntime;
+                providerThread: OrchestrationV2ProviderThread;
+              }>();
+            }
+            const projection = projectionOption.value;
+            const providerThread =
+              projection.providerThreads.find(
+                (candidate) => candidate.id === projection.thread.activeProviderThreadId,
+              ) ?? projection.providerThreads.at(-1);
+            const latestRun = projection.runs.at(-1);
+            if (
+              providerThread === undefined ||
+              providerThread.providerSessionId === null ||
+              latestRun === undefined
+            ) {
+              return Option.none<{
+                runtime: ProviderAdapterV2SessionRuntime;
+                providerThread: OrchestrationV2ProviderThread;
+              }>();
+            }
+            const providerSessionId = providerThread.providerSessionId;
+            if (Option.isNone(runtimePolicyService)) {
+              return yield* new ProviderSessionOpenError({
+                instanceId: latestRun.modelSelection.instanceId,
+                providerSessionId,
+                cause: "Runtime policy resolution is unavailable.",
+              });
+            }
+            const runtimePolicy = yield* runtimePolicyService.value
+              .resolve({
+                thread: projection.thread,
+                modelSelection: latestRun.modelSelection,
+              })
+              .pipe(
+                Effect.mapError(
+                  (cause) =>
+                    new ProviderSessionOpenError({
+                      instanceId: latestRun.modelSelection.instanceId,
+                      providerSessionId,
+                      cause,
+                    }),
+                ),
+              );
+            const existingSession = projection.providerSessions.find(
+              (candidate) => candidate.id === providerSessionId,
+            );
+            const runtime = yield* manager.open({
+              threadId,
+              providerSessionId,
+              modelSelection: latestRun.modelSelection,
+              runtimePolicy,
+              ...(existingSession === undefined ? {} : { resumeFromSession: existingSession }),
+              ...(providerThread.nativeThreadRef?.nativeId == null
+                ? {}
+                : { initialNativeThreadId: providerThread.nativeThreadRef.nativeId }),
+            });
+            return Option.some({ runtime, providerThread });
+          }),
+      };
+      return ProviderSessionManagerV2.of(manager);
     }),
   );
 

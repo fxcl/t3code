@@ -35,15 +35,12 @@ import {
   type TerminalSessionStatus,
   type TerminalSummary,
   type TerminalWriteInput,
-  ClaudeSettings,
-  CodexSettings,
   ProviderInstanceId,
 } from "@t3tools/contracts";
 import { makeKeyedCoalescingWorker } from "@t3tools/shared/KeyedCoalescingWorker";
 import { HostProcessArchitecture, HostProcessPlatform } from "@t3tools/shared/hostProcess";
 import { mergePathEntries } from "@t3tools/shared/shell";
 
-import { acpRegistryManagedBinaryDirectories } from "../provider/acp/AcpRegistrySupport.ts";
 import { getTerminalLabel } from "@t3tools/shared/terminalLabels";
 import * as DateTime from "effect/DateTime";
 import * as Context from "effect/Context";
@@ -63,8 +60,6 @@ import * as SynchronizedRef from "effect/SynchronizedRef";
 
 import * as ServerConfig from "../config.ts";
 import { mergeProviderInstanceEnvironment } from "../provider/ProviderInstanceEnvironment.ts";
-import { resolveCodexHomeLayout } from "../provider/Drivers/CodexHomeLayout.ts";
-import { makeClaudeEnvironment } from "../provider/Drivers/ClaudeHome.ts";
 import { deriveProviderInstanceConfigMap } from "../provider/Layers/ProviderInstanceRegistryHydration.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import {
@@ -106,8 +101,6 @@ const DEFAULT_OPEN_ROWS = 30;
 const TERMINAL_ENV_BLOCKLIST = new Set(["PORT", "ELECTRON_RENDERER_PORT", "ELECTRON_RUN_AS_NODE"]);
 const nowIso = Effect.map(DateTime.now, DateTime.formatIso);
 const MAX_TERMINAL_LABEL_LENGTH = 128;
-const decodeClaudeSettings = Schema.decodeUnknownOption(ClaudeSettings);
-const decodeCodexSettings = Schema.decodeUnknownOption(CodexSettings);
 
 class TerminalSubprocessCheckError extends Schema.TaggedError<TerminalSubprocessCheckError>()(
   "TerminalSubprocessCheckError",
@@ -1351,13 +1344,6 @@ interface TerminalManagerOptions {
   ptyAdapter: PtyAdapter.PtyAdapter["Service"];
   shellResolver?: () => string;
   env?: NodeJS.ProcessEnv;
-  /**
-   * Catalog cache and tool directories for managed ACP Registry installs. Their
-   * install directories are appended to the terminal PATH so users can run
-   * managed agents by name (e.g. `kimi login`).
-   */
-  managedBinaryCacheDir?: string;
-  managedBinaryToolsDir?: string;
   subprocessInspector?: TerminalSubprocessInspector;
   processTable?: Effect.Effect<
     ReadonlyArray<ResourceMonitorProcessTableEntry>,
@@ -1401,24 +1387,7 @@ export const resolveProviderInstanceTerminalEnvironment = Effect.fn(
     return yield* new TerminalProviderInstanceNotFoundError({ providerInstanceId });
   }
 
-  let resolved = mergeProviderInstanceEnvironment(instance.environment, input.env ?? {});
-  if (instance.driver === "codex") {
-    const config = decodeCodexSettings(instance.config ?? {});
-    if (Option.isSome(config)) {
-      const layout = yield* resolveCodexHomeLayout(config.value).pipe(
-        Effect.provideService(Path.Path, input.path),
-      );
-      if (layout.effectiveHomePath)
-        resolved = { ...resolved, CODEX_HOME: layout.effectiveHomePath };
-    }
-  } else if (instance.driver === "claudeAgent") {
-    const config = decodeClaudeSettings(instance.config ?? {});
-    if (Option.isSome(config)) {
-      resolved = yield* makeClaudeEnvironment(config.value, resolved).pipe(
-        Effect.provideService(Path.Path, input.path),
-      );
-    }
-  }
+  const resolved = mergeProviderInstanceEnvironment(instance.environment, input.env ?? {});
 
   return Object.fromEntries(
     Object.entries(resolved).filter((entry): entry is [string, string] => entry[1] !== undefined),
@@ -1451,8 +1420,6 @@ export const make = Effect.fn("TerminalManager.make")(function* () {
         (cause) => new TerminalSubprocessCheckError({ cause, command: "resource-monitor" }),
       ),
     ),
-    managedBinaryCacheDir: providerStatusCacheDir,
-    managedBinaryToolsDir: path.join(baseDir, "tools"),
     registerTerminalProcesses: portDiscovery.registerTerminalProcesses,
     unregisterTerminal: portDiscovery.unregisterTerminal,
     resolveProviderInstanceEnvironment,
@@ -2257,39 +2224,6 @@ export const makeWithOptions = Effect.fn("TerminalManager.makeWithOptions")(func
           Effect.gen(function* () {
             const shellCandidates = resolveShellCandidates(shellResolver, platform, baseEnv);
             const terminalEnv = createTerminalSpawnEnv(baseEnv, session.runtimeEnv, platform);
-            // Append (never prepend) managed ACP agent install directories so
-            // `kimi login` and friends resolve by name without shadowing any
-            // system or user tool of the same name.
-            if (
-              options.managedBinaryCacheDir !== undefined &&
-              options.managedBinaryToolsDir !== undefined
-            ) {
-              const managedDirectories = yield* acpRegistryManagedBinaryDirectories({
-                fileSystem,
-                path,
-                cacheDir: options.managedBinaryCacheDir,
-                toolsDir: options.managedBinaryToolsDir,
-                platform,
-                architecture,
-              });
-              if (managedDirectories.length > 0) {
-                const delimiter = platform === "win32" ? ";" : ":";
-                const pathKey =
-                  platform === "win32"
-                    ? (Object.keys(terminalEnv).find(
-                        (candidate) => candidate.toLowerCase() === "path",
-                      ) ?? "PATH")
-                    : "PATH";
-                const merged = mergePathEntries(
-                  terminalEnv[pathKey],
-                  managedDirectories.join(delimiter),
-                  platform,
-                );
-                if (merged !== undefined) {
-                  terminalEnv[pathKey] = merged;
-                }
-              }
-            }
             const spawnResult = yield* trySpawn(shellCandidates, terminalEnv, session);
             ptyProcess = spawnResult.process;
             startedShell = spawnResult.shellLabel;
