@@ -3,7 +3,7 @@
   // Exported types are part of our contracts even before they have consumers.
   "rules": { "types": "off", "nsTypes": "off" },
   // These executables are supplied by the OS or installed separately from npm.
-  "ignoreBinaries": ["eas", "file", "mkfifo", "pkill", "pkg-config", "plutil", "sips"],
+  "ignoreBinaries": ["file", "mkfifo", "pkill", "pkg-config", "plutil", "sips"],
   "workspaces": {
     ".": {
       // Keep vendored reference repositories outside the root project.
@@ -13,19 +13,16 @@
       "vitest": { "entry": [".github/**/*.test.cjs"] },
     },
     "scripts": {
-      // Knip loads its preprocessor through a CLI option; native verification and
-      // worktree setup (from t3.json) run directly.
-      "entry": ["knip-schemas.ts", "mobile-native-client.ts", "setup-worktree.ts"],
+      // Knip loads its preprocessor through a CLI option; worktree setup (from t3.json)
+      // runs directly.
+      "entry": ["knip-schemas.ts", "setup-worktree.ts"],
     },
     "apps/server": {
       // Vite+ pack entries and the launcher used by installed background services.
       "entry": [
         "src/bin.ts!",
-        "src/claude-history-worker.ts!",
         "scripts/cli.ts",
-        "scripts/evaluate-thread-titles.ts",
         "scripts/measure-pr-preview.ts",
-        "scripts/probe-claude-fork-local-rollback-replay.ts",
         "scripts/update-test-shard-weights.ts",
         "scripts/verify-background-live.ts",
         "src/provider/testFixtures/*.mjs",
@@ -65,43 +62,12 @@
       // reports an entire component module when nothing imports it.
       "ignoreIssues": { "src/components/ui/*.tsx": ["exports", "nsExports", "duplicates"] },
     },
-    "apps/mobile": {
-      // Expo loads plugins and the fingerprint config by string; Metro embeds the browser entry in the native WebView.
-      "entry": [
-        "index.ts!",
-        "fingerprint.config.js",
-        "plugins/*.cjs",
-        "scripts/generate-device-stream.mts",
-        "src/features/devices/device-stream.browser.ts!",
-      ],
-      // Fonts are configured as asset paths; Expo autolinks the native packages.
-      "ignoreDependencies": [
-        "@expo-google-fonts/dm-sans",
-        "@t3tools/mobile-review-diff-native",
-        "@t3tools/mobile-terminal-native",
-      ],
-    },
-    "apps/mobile/modules/t3-markdown-text": {
-      // React Native codegen discovers component specifications by filename.
-      "entry": ["src/*NativeComponent.ts!"],
-    },
     "infra/relay": {
       "entry": ["alchemy.run.ts!", "src/persistence/schema.ts!"],
     },
     "packages/*": {
       // These workspace packages are private to this monorepo.
       "includeEntryExports": true,
-    },
-    "packages/effect-acp": {
-      "includeEntryExports": true,
-      "entry": ["test/fixtures/*.ts"],
-      // Generated upstream protocol definitions are retained as a complete set.
-      "ignoreIssues": { "src/_generated/**": ["exports", "types"] },
-    },
-    "packages/effect-codex-app-server": {
-      "includeEntryExports": true,
-      "entry": ["test/fixtures/*.ts"],
-      "ignoreIssues": { "src/_generated/**": ["exports", "types"] },
     },
   },
 }
