@@ -73,5 +73,5 @@ cannot be overwritten by a stale cancellation.
 The [continuation handler](../../apps/server/src/orchestration-v2/RestartContinuation.ts)
 rechecks the preference, archive state, provider selection, and newer user work before
 dispatching. Stable command and message IDs prevent duplicate submissions after an
-outbox retry. Codex resumes without adding provider prompt text; other adapters receive
-the continuation message through their normal turn path.
+outbox retry. The continuation message is dispatched through the provider's normal
+turn path.

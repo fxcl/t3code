@@ -161,7 +161,7 @@ vp run --filter t3code-relay deploy -- --stage "$USER" --env-file .env.local
 ### Managed tunnel cleanup rollout
 
 Keep `RELAY_TUNNEL_CLEANUP_MODE=off` for the first production deploy. That deploy applies the
-nullable allocation migration and adds the recovery endpoints. Web and mobile clients need no
+nullable allocation migration and adds the recovery endpoints. Web clients need no
 coordinated release. CLI and desktop server builds must reach users before cleanup is enabled,
 because those builds register recovery and replace a deleted tunnel after wake.
 
@@ -191,7 +191,7 @@ stage, test Cloudflare account, disposable host, and disposable T3 home. Keep pr
 `off` or `dry-run` until it passes. Do not stop a daily-use T3 server.
 
 1. Deploy the disposable stage with cleanup `dry-run`. Link a first disposable environment through
-   web or mobile settings and confirm its tunnel is healthy and recovery is registered.
+   web or desktop settings and confirm its tunnel is healthy and recovery is registered.
 2. Stop that host and restart the same T3 home on a different local port. Confirm the public
    hostname reaches the new port and sends nothing to the old one.
 3. Link a second disposable environment with a server build that predates recovery registration.

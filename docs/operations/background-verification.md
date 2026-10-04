@@ -28,8 +28,15 @@ a clean-restart persistence check, not proof of crash recovery during delivery.
 Use `--scenario idle|active|native|nested`, `--model`, `--provider`, and `--timeout`
 in seconds to narrow a run. The default provider is `claudeAgent` and the default
 model is `claude-sonnet-4-6`. The native scenario specifically requests Claude's
-background Bash tool; do not treat it as generic provider conformance. Active
-delivery expects a provider supporting active steering. Missing authentication,
+background Bash tool; do not treat it as generic provider conformance.
+
+This verifier predates the Pi-only convergence: those defaults and the `native`
+scenario name a retired provider and cannot pass on this build as-is. Run the
+generic scenarios against the shipped Pi driver with an explicit `--provider pi`
+and a Pi model; treat the `native` scenario as retained history for the removed
+Claude surface.
+
+Active delivery expects a provider supporting active steering. Missing authentication,
 unsupported capabilities, provider failures, and model instruction violations
 are failures, never skipped passes. Inspect the retained trace to distinguish them.
 
@@ -47,6 +54,6 @@ inventory, and machine-readable verdict. Suite reports link every attempt,
 including failures; repeating a test does not erase an earlier failure. Evidence
 is local and may contain provider output. Do not upload the entire T3 home.
 
-This loop does not verify rendered folding, mobile UI, cancellation, or abrupt
+This loop does not verify rendered folding, cancellation, or abrupt
 process loss between provider acceptance and receipt persistence. Those require
 additional scenarios before claiming complete background-lifecycle coverage.

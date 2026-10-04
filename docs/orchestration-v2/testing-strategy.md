@@ -151,9 +151,8 @@ arrive before the corresponding `promptAsync` or `abort` response. Subagent fixt
 both parent and child session ids so root-only terminal behavior remains testable.
 
 Provider transcript recorders live with the server orchestration testkit, not with provider client
-packages. Use `bun run record:codex-replay -- --scenario <name>` for Codex app-server transcripts
-and `bun run record:claude-replay -- --scenario <name>` for Claude Agent SDK transcripts. Use
-`pnpm --filter t3 record:cursor-replay --scenario <name>` for Cursor Agent SDK transcripts.
+packages. The per-provider recorder scripts of the retired providers (`record:codex-replay`,
+`record:claude-replay`, `record:cursor-replay`) were removed together with those providers.
 
 ## Contract Test Levels
 
@@ -225,7 +224,7 @@ Testing infrastructure should be built before production rewrites:
 2. Effect service definitions.
 3. provider runtime transport abstraction.
 4. generic replay runtime.
-5. Codex, Claude, Cursor, OpenCode, and ACP transcript loaders for app-owned provider replay fixtures.
+5. provider transcript loaders for app-owned provider replay fixtures.
 6. projection reducer tests for core invariants.
 7. full command-to-projection integration tests.
 8. production layers.

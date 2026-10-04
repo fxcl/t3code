@@ -12,27 +12,21 @@ and modes you choose in a draft keep their permissions.
 | --------------------- | ------------------------------------------------------------------------------------- |
 | **Supervised**        | Requests approval for commands and file changes.                                      |
 | **Auto-accept edits** | Approves file edits automatically; other actions can still require approval.          |
-| **Auto**              | Uses the provider's automatic review to approve routine actions and ask about others. |
 | **Full access**       | Allows commands and edits without approval prompts.                                   |
+
+Pi does not expose an AI approval reviewer, so the **Auto** option is not offered.
+Threads that already stored Auto run and display as **Supervised**.
 
 Approve or reject requests in the conversation to let the agent continue. Permission modes do
 not prevent the agent from asking questions about the task.
 
 ## Provider differences
 
-Providers enforce permissions differently. Some read-only actions can proceed in **Supervised**.
-**Auto** uses automatic review on Codex, Claude, Cursor, and Grok; providers without an equivalent,
-including OpenCode and Antigravity, fall back to asking. On Grok, commands its review blocks come
-to you for approval.
+Pi enforces the selected mode through its blocking tool hook: read-only tools
+continue in **Supervised**, and edit and write tools run in **Auto-accept edits**
+while commands and extension tools still ask. The mode is a policy over Pi tool
+calls, not an operating-system sandbox; code that a trusted Pi extension runs
+outside a tool call stays governed by Pi's own extension trust model.
 
-Grok offers no **Auto-accept edits**. A Grok thread already set to it runs in **Supervised**. Grok
-file-change approvals offer **Allow all edits this session**. Its command approvals have no
-session-wide choice, because Grok would remember that command for the whole project.
-
-ACP Registry agents run their own tools in their own mode; T3 Code answers their approval requests
-by the permission mode. See [ACP Registry permissions](./providers-acp.md#permissions-and-terminals).
-
-Antigravity can still send native approval requests in **Full access**. It only offers remembered
-approvals for actions that support them.
-
-See the [provider guides](./install.md#providers) for setup and provider-specific limits.
+Changing the mode restarts the Pi provider session and resumes the same native
+conversation. See the [Pi guide](./providers-pi.md#permission-modes) for details.

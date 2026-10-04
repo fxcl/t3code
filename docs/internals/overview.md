@@ -1,6 +1,6 @@
 # Architecture
 
-T3 Code keeps execution in the environment that owns the workspace. Web, desktop, and mobile
+T3 Code keeps execution in the environment that owns the workspace. Web and desktop
 clients control it over authenticated RPC. A remote client must never substitute its own filesystem,
 provider credentials, or machine state for the environment's. The desktop app bundles a server,
 but its renderer follows the same boundary.
@@ -9,8 +9,8 @@ but its renderer follows the same boundary.
 
 Provider processes, terminals, Git, and project files belong to the server. Shared connection and
 domain state belongs in `packages/client-runtime`; clients supply platform services and UI.
-Keeping that logic shared prevents reconnect and multi-environment behavior from diverging between
-web and mobile. See [connection runtime](./connection-runtime.md) and
+Keeping that logic shared prevents reconnect and multi-environment behavior from diverging
+between clients. See [connection runtime](./connection-runtime.md) and
 [remote environments](./remote.md).
 
 The [RPC contract](../../packages/contracts/src/rpc.ts) is the boundary between independently
@@ -20,7 +20,7 @@ method on it. See [environment auth](./environment-auth.md).
 
 ### Pull request linking compatibility
 
-Web, desktop, mobile, and environments upgrade independently. Negotiate linking through the
+Web, desktop, and environments upgrade independently. Negotiate linking through the
 environment descriptor, never through a client version or an assumed coordinated release:
 
 | Environment capability                | Client behavior                                                                                                   |
@@ -38,7 +38,10 @@ does not schedule their removal. Missing new capabilities must also override cac
 after an environment downgrade.
 
 Provider-specific behavior belongs behind an adapter. Orchestration works with normalized commands
-and events, so adding a provider should not require branches throughout the domain or clients.
+and events, so the adapter boundary stays thin even though Pi is the only shipped provider. This
+repository intentionally retires upstream T3 Code's provider-breadth and multi-surface (web,
+desktop, mobile) principles: Pi-only with web and desktop clients is the agreed end state, and
+removed drivers keep degrading to "unavailable" snapshots for fork tolerance instead of erroring.
 See [provider constraints](./providers.md).
 
 ## Settings ownership

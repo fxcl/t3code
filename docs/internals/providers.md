@@ -5,22 +5,16 @@ protocols, account ownership, permissions, and capabilities belong at the
 [adapter boundary](../../apps/server/src/orchestration-v2/ProviderAdapter.ts). Normalize there
 instead of spreading provider checks through reactors and clients.
 
+This build ships exactly one provider: Pi. The constraint set below survives from the
+provider-neutral design; upstream T3 Code's per-provider constraints were retired together with
+the removed adapters. Persisted instances of removed driver kinds must keep producing an
+"unavailable" provider snapshot — fork tolerance is a hard contract, never a parse failure.
+
 A driver kind identifies an integration; an instance identifies one configuration and account
 lifecycle. Route work by instance, so two accounts using the same driver do not share mutable
 session or catalog state.
 
-## Process and account isolation
-
-T3-managed OpenCode chat uses one server per thread. Its MCP registrations are directory-scoped, while
-T3's MCP connection is thread-scoped. Sharing a chat server between threads in one directory would
-let them replace each other's connection. Catalog and text-generation work can share the
-[instance-owned helper](../../apps/server/src/provider/OpenCodeServerOwner.ts), which closes
-after an idle period. External OpenCode servers remain externally owned and can require an
-external restart to pick up configuration changes.
-
-OpenCode also stores persistent approval grants per directory. Automatic full-access replies use
-`once` so they cannot widen a supervised thread's permissions on a shared external server.
-See the [adapter](../../apps/server/src/orchestration-v2/Adapters/OpenCodeAdapterV2.ts).
+## Pi runs as the user's own install
 
 Pi runs the user's own `pi` install in RPC mode and owns native extension, package, and project
 trust discovery. T3 injects only its namespaced MCP bridge, so a Pi session behaves as it does in
@@ -29,47 +23,17 @@ Forks use Pi's CLI in the destination directory because RPC session switching re
 session's cwd. Provider switches still use portable handoff summaries.
 See the [adapter](../../apps/server/src/orchestration-v2/Adapters/PiAdapterV2.ts).
 
-Antigravity separates account profiles per instance while sharing installed executables across the
-environment. It forces file-based credential storage because the native macOS keychain entry would
-otherwise be shared across instances. The launch environment removes ambient Google credentials,
-so an instance cannot silently use another account or billing project. The agent also resolves
-its user-global skill directories under that profile, so the profile links those two directories
-back to the user's real `~/.gemini`; MCP servers, hooks, and rules there stay out of the profile.
-See [profile isolation](../../apps/server/src/provider/antigravityAuthSupport.ts).
-
-The [Antigravity installer](../../apps/server/src/provider/AntigravityInstallation.ts) outlives
-client connections and provider-instance rebuilds. Releases are immutable, with an atomic pointer
-selecting the version for new processes. Running processes hold leases on their version. Updates
-and removal must respect those leases instead of replacing executables under a running agent.
+The Pi-native operations (tree navigation and compaction, scoped models, trust, changelog, auth
+flow, share/export, extension dialogs) are typed RPCs in
+[`packages/contracts/src/piNative.ts`](../../packages/contracts/src/piNative.ts) and are served
+only through the Pi adapter, keyed per thread.
 
 ## Setup must not happen as a health-check side effect
 
-Opening a provider session can start MCP servers, run hooks, or launch a login browser.
-[Grok probes](../../apps/server/src/provider/Layers/GrokProvider.ts) avoid authentication and
-session creation for this reason. Antigravity likewise reserves authenticated catalog sessions for
-explicit setup or model refresh; background checks use initialization only.
-
-[Antigravity sign-in](../../apps/server/src/provider/AntigravityAuth.ts) belongs to the initiating
-T3 auth session. The client carries the return URL back to the environment because the provider's
-loopback listener may be on another machine. Forward only the callback for the owned pending flow;
-a successful callback HTTP request is not proof that provider authentication finished. The native
-process owns token exchange and storage.
-
-Managed ChatGPT sign-in for a remote environment can finish on a local primary. The
-[primary handoff](../../apps/server/src/provider/CodexChatGptHandoff.ts) uses an ephemeral
-credential store and the destination's environment ID. It exchanges and verifies the code before
-transferring the issued client registration and tokens. Only the destination persists and refreshes
-that session; retaining a primary refresh session would race refresh-token rotation. Without a local
-primary, the client uses the remote callback completion flow.
-
-Antigravity sign-out closes admission to new processes and stops existing processes before clearing account
-metadata. Otherwise a helper or resumed session could retain the old account. Cached model lists
-do not establish current access, and an authoritative empty catalog must clear the old list.
-
-Antigravity text-generation helpers deny tool requests, but native hooks and MCP configuration can
-run before the prompt. They reject profiles with such configuration before launch. Prompt
-instructions and tool denial do not create a native sandbox.
-See [helper constraints](../../apps/server/src/textGeneration/AntigravityTextGeneration.ts).
+Opening a provider session can start MCP servers, run hooks, or launch a login browser. Status
+and catalog checks therefore stay passive: they must not authenticate, create sessions, or run
+setup as a side effect of a health check. Pi's trust model is the user's own; do not widen it
+from a background check.
 
 ## Provider updates run only through the owning installer
 
@@ -78,13 +42,10 @@ it. Homebrew and npm are proven by the real path (symlinks followed): a versione
 `brew --prefix`, or `<prefix>/lib/node_modules/<pkg>/` (Windows: the shim beside `node_modules`).
 Native installer layouts and the global bin directories of pnpm, Bun, and Vite+ may match on either
 the resolved path or its real target, since those installers place real files or their own symlinks
-there. Cursor and Grok are the exception: their only updater is the CLI itself, which detects its
-own installer, so any resolved executable runs `<binary> update`. Anything unproven stays
-manual-only but still reports the version gap. npm updates pin
+there. Anything unproven stays manual-only but still reports the version gap. npm updates pin
 `--prefix` because the `npm` on `PATH` can belong to a different Node than the one that owns the
-provider. Homebrew
-compares against `brew info` since casks trail npm by hours; native installs share npm's version
-train, so the registry stays authoritative for them.
+provider. Homebrew compares against `brew info` since casks trail npm by hours; native installs
+share npm's version train, so the registry stays authoritative for them.
 See the [resolver](../../apps/server/src/provider/providerMaintenance.ts).
 
 Ownership is cached per instance and re-read immediately before an update runs. The
@@ -92,26 +53,19 @@ Ownership is cached per instance and re-read immediately before an update runs. 
 changed since the advisory, and reports success only when the refreshed provider is still installed
 with a readable, current version.
 
-## Protocol traps
+## Capabilities must describe what the provider can actually do
 
-Codex async questions arrive as notifications and are answered with a new user message. There is
-no pending RPC response to send. The
-[adapter](../../apps/server/src/orchestration-v2/Adapters/CodexAdapterV2.ts) persists them as
-`user_input_request` turn items and runtime requests with `responseCapability: { type: "message" }`.
-Their execution nodes do not block the run. Web, desktop, and mobile use their normal question
-panels, and requests remain pending after a turn finishes, a provider exits, or the server restarts.
+Capabilities drive policy; a display label is not a capability. If the provider cannot roll back
+its conversation, the [checkpoint boundary](./overview.md#turn-completion-and-checkpoints) must
+reject revert before touching files — for Pi, a refusal from `rollbackThread` surfaces as a
+visible failure, not a silent no-op. Native permission and question option IDs must also survive
+normalization.
 
 `runtime-request.respond` reads the persisted request and question item, validates required
 answers, and commits the resolution and a user message in one transaction. Repeating the same
-command returns its receipt without posting the answer twice. The normal message path starts or
-resumes a run, queues behind active work, or steers when the adapter supports it. Blocking questions
-retain the provider's live response path. Do not infer that a request has disappeared merely because
-it is outside the recent history window.
-
-Capabilities must describe what the provider can actually do. Antigravity can capture workspace
-checkpoints but cannot roll back its conversation. The [checkpoint boundary](./overview.md#turn-completion-and-checkpoints)
-therefore rejects revert before touching files. Native permission and question option IDs must
-also survive normalization; a display label is not necessarily a valid reply.
+command returns its receipt without posting the answer twice. Blocking questions retain the
+provider's live response path. Do not infer that a request has disappeared merely because it is
+outside the recent history window.
 
 ## Attachments and stored history
 
@@ -136,10 +90,6 @@ Log payloads have a 64 KiB encoded budget. Large or deeply nested payloads becom
 summaries that retain routing identifiers, methods, status, and error fields. Traversal is bounded
 before redaction and serialization, so logging a large response does not require several full
 copies. These limits apply to diagnostics; provider event handling is unchanged.
-
-Codex resumes with metadata-only reads when it needs a thread's identity and update time. Its
-initialization capabilities opt out of `turn/diff/updated`: T3 derives diffs from checkpoints.
-The logger filters those notifications before traversal when an older provider still sends them.
 
 Model classification has its own [manifest constraints](./model-manifest.md). Assistant-reference
 handling is documented under [citations](./assistant-citations.md).

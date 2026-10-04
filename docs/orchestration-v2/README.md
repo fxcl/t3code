@@ -4,7 +4,7 @@ This document set describes the target architecture for the next orchestration m
 
 V2 is an orchestrator rewrite, not a rewrite of the whole app domain platform. Existing non-orchestration domains, persistence/migration infrastructure, websocket/RPC infrastructure, and projection streaming semantics should be retained unless V2 exposes a concrete orchestration-specific gap.
 
-V2 is designed around the real provider behavior observed in the Codex app-server probes, but it is not Codex-specific. Codex is treated as the richest protocol we currently have; weaker providers are adapted into the same model with app-owned ids and explicit capability flags.
+V2 was designed around the real provider behavior observed in the Codex app-server probes; those probe findings remain as design history. The model is provider-neutral: adapters translate any provider into the same graph with app-owned ids and explicit capability flags. Pi is the only provider with a shipped adapter in this build.
 
 ## Documents
 
