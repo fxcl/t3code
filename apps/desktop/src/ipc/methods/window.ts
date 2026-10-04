@@ -270,6 +270,16 @@ export const pickProjectFavicon = DesktopIpc.makeIpcMethod({
   }),
 });
 
+export const quitApp = DesktopIpc.makeIpcMethod({
+  channel: IpcChannels.QUIT_APP_CHANNEL,
+  payload: Schema.Void,
+  result: Schema.Void,
+  handler: Effect.fn("desktop.ipc.window.quitApp")(function* () {
+    const electronApp = yield* ElectronApp.ElectronApp;
+    yield* electronApp.quit;
+  }),
+});
+
 export const setTheme = DesktopIpc.makeIpcMethod({
   channel: IpcChannels.SET_THEME_CHANNEL,
   payload: DesktopThemeSchema,

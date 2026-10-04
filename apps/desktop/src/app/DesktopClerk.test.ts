@@ -32,11 +32,15 @@ import * as Option from "effect/Option";
 import * as Exit from "effect/Exit";
 import * as FileSystem from "effect/FileSystem";
 import * as ElectronApp from "../electron/ElectronApp.ts";
+import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronShell from "../electron/ElectronShell.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
 import * as DesktopClerk from "./DesktopClerk.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
 import * as DesktopPreReadyFileSystem from "./DesktopPreReadyFileSystem.ts";
+
+const makeElectronDialogStub = (): ElectronDialog.ElectronDialog["Service"] =>
+  ({ showErrorBox: () => Effect.void }) as unknown as ElectronDialog.ElectronDialog["Service"];
 
 const makeDesktopClerkLayer = (
   isDevelopment = true,
@@ -71,6 +75,10 @@ const makeDesktopClerkLayer = (
         NodePath.layerPosix,
         Layer.succeed(DesktopEnvironment.DesktopEnvironment, environment),
         Layer.succeed(ElectronApp.ElectronApp, electronApp),
+        Layer.succeed(
+          ElectronDialog.ElectronDialog,
+          makeElectronDialogStub(),
+        ),
         Layer.succeed(ElectronShell.ElectronShell, shell),
         fileSystemLayer,
       ),
@@ -101,7 +109,7 @@ describe("DesktopClerk", () => {
           {
             storage: storageAdapter,
             passkeys: true,
-            renderer: { scheme: "t3code-dev", host: "app" },
+            renderer: { scheme: "picode-dev", host: "app" },
           },
         ],
       ]);
@@ -109,7 +117,7 @@ describe("DesktopClerk", () => {
       // The bridge acquires Electron's single-instance lock at creation, and
       // the lock both lives in and creates the userData directory — so the
       // real path must be set before the bridge exists.
-      assert.deepEqual(events, ["setPath:userData:/tmp/app-data/t3code-dev", "createClerkBridge"]);
+      assert.deepEqual(events, ["setPath:userData:/tmp/app-data/picode-dev", "createClerkBridge"]);
       storageMock.mockClear();
       createClerkBridgeMock.mockClear();
     });
@@ -120,13 +128,13 @@ describe("DesktopClerk", () => {
       name: "packaged Windows",
       isDevelopment: false,
       platform: "win32" as const,
-      userData: "/tmp/app-data/t3code-v2",
+      userData: "/tmp/app-data/picode",
     },
     {
       name: "development",
       isDevelopment: true,
       platform: "win32" as const,
-      userData: "/tmp/app-data/t3code-dev",
+      userData: "/tmp/app-data/picode-dev",
     },
   ])(
     "creates the bridge before startup can yield to the event loop ($name)",
@@ -224,6 +232,7 @@ describe("DesktopClerk", () => {
     }).pipe(
       Effect.provide(makeDesktopClerkLayer()),
       Effect.provideService(ElectronApp.ElectronApp, electronApp),
+      Effect.provideService(ElectronDialog.ElectronDialog, makeElectronDialogStub()),
       Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
     );
   });
@@ -252,6 +261,49 @@ describe("DesktopClerk", () => {
     }).pipe(
       Effect.provide(makeDesktopClerkLayer()),
       Effect.provideService(ElectronApp.ElectronApp, electronApp),
+      Effect.provideService(ElectronDialog.ElectronDialog, makeElectronDialogStub()),
+      Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
+    );
+  });
+
+  it.effect("shows an error before quitting and interrupts when the instance lock is denied", () => {
+    const calls: Array<string> = [];
+    const showErrorBox = vi.fn((title: string, content: string) =>
+      Effect.sync(() => {
+        calls.push("dialog");
+        assert.equal(title, "piCode is already running");
+        assert.equal(content, "piCode is already running. Quit the other app and try again.");
+      }),
+    );
+    const on = vi.fn(() => Effect.die("unexpected second-instance listener registration"));
+    const electronApp = {
+      quit: Effect.sync(() => {
+        calls.push("quit");
+      }),
+      on,
+    } as unknown as ElectronApp.ElectronApp["Service"];
+    const electronDialog = ElectronDialog.ElectronDialog.of({
+      showErrorBox,
+    } as unknown as ElectronDialog.ElectronDialog["Service"]);
+    const electronWindow = {} as ElectronWindow.ElectronWindow["Service"];
+    storageMock.mockReturnValue(storageAdapter);
+    createClerkBridgeMock.mockReturnValue({ cleanup: vi.fn(), isPrimaryInstance: false });
+
+    return Effect.gen(function* () {
+      const clerk = yield* DesktopClerk.DesktopClerk;
+      const exit = yield* Effect.exit(Effect.scoped(clerk.configure));
+
+      assert.equal(exit._tag, "Failure");
+      if (exit._tag === "Failure") {
+        assert.isTrue(Cause.hasInterruptsOnly(exit.cause));
+      }
+      assert.deepEqual(calls, ["dialog", "quit"]);
+      assert.equal(showErrorBox.mock.calls.length, 1);
+      assert.equal(on.mock.calls.length, 0);
+    }).pipe(
+      Effect.provide(makeDesktopClerkLayer()),
+      Effect.provideService(ElectronApp.ElectronApp, electronApp),
+      Effect.provideService(ElectronDialog.ElectronDialog, electronDialog),
       Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
     );
   });
@@ -280,24 +332,25 @@ it.effect(
       const clerk = yield* DesktopClerk.DesktopClerk;
       yield* clerk.configure;
       const event = { preventDefault: vi.fn() };
-      listeners.get("open-url")!(event, "t3code-dev://app/auth/callback?code=clerk-code");
-      listeners.get("open-url")!(event, "t3code://app/welcome");
+      listeners.get("open-url")!(event, "picode-dev://app/auth/callback?code=clerk-code");
+      listeners.get("open-url")!(event, "picode://app/welcome");
       assert.equal(loadURL.mock.calls.length, 0);
       assert.equal(event.preventDefault.mock.calls.length, 0);
       listeners.get("second-instance")!({}, [
         "t3",
-        "t3code-dev://app/settings/providers?instanceId=work&code=never-forward",
+        "picode-dev://app/settings/providers?instanceId=work&code=never-forward",
       ]);
       yield* Effect.promise(() => revealed.promise);
       assert.deepEqual(loadURL.mock.calls, [
-        ["t3code-dev://app/settings/providers?instanceId=work"],
+        ["picode-dev://app/settings/providers?instanceId=work"],
       ]);
-      listeners.get("open-url")!(event, "t3code-dev://app/welcome#agents:machine-id");
+      listeners.get("open-url")!(event, "picode-dev://app/welcome#agents:machine-id");
       assert.equal(event.preventDefault.mock.calls.length, 1);
     }).pipe(
       Effect.scoped,
       Effect.provide(makeDesktopClerkLayer()),
       Effect.provideService(ElectronApp.ElectronApp, electronApp),
+      Effect.provideService(ElectronDialog.ElectronDialog, makeElectronDialogStub()),
       Effect.provideService(ElectronWindow.ElectronWindow, electronWindow),
     );
   },
@@ -377,6 +430,7 @@ it.effect.each(["startup", "open-url"] as const)(
         Effect.provide(makeDesktopClerkLayer(true, [], "darwin", undefined, shell)),
         Effect.provideService(HostProcessArguments, entry === "startup" ? ["t3", link] : ["t3"]),
         Effect.provideService(ElectronApp.ElectronApp, electronApp),
+        Effect.provideService(ElectronDialog.ElectronDialog, makeElectronDialogStub()),
         Effect.provideService(
           ElectronWindow.ElectronWindow,
           {} as ElectronWindow.ElectronWindow["Service"],

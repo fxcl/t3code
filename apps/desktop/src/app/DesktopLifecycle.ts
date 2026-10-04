@@ -60,6 +60,17 @@ export class DesktopLifecycle extends Context.Service<
 const { logInfo: logLifecycleInfo, logError: logLifecycleError } =
   makeComponentLogger("desktop-lifecycle");
 
+export const DESKTOP_DEV_SHUTDOWN_MESSAGE = "t3code-dev-shutdown";
+
+export function isDesktopDevShutdownMessage(message: unknown): boolean {
+  return (
+    typeof message === "object" &&
+    message !== null &&
+    "type" in message &&
+    message.type === DESKTOP_DEV_SHUTDOWN_MESSAGE
+  );
+}
+
 function addScopedListener<Args extends ReadonlyArray<unknown>>(
   target: unknown,
   eventName: string,
@@ -140,7 +151,7 @@ function handleBeforeQuit(
 }
 
 function quitFromSignal(
-  signal: "SIGINT" | "SIGTERM",
+  signal: "SIGINT" | "SIGTERM" | "dev-runner",
   runEffect: <A, E>(
     effect: Effect.Effect<A, E, DesktopLifecycleRegistrationServices>,
   ) => Promise<A>,
@@ -252,6 +263,14 @@ export const make = DesktopLifecycle.of({
         }).pipe(Effect.withSpan("desktop.lifecycle.windowAllClosed")),
       );
     });
+
+    if (environment.isDevelopment) {
+      yield* addScopedListener<[unknown]>(process, "message", (message) => {
+        if (isDesktopDevShutdownMessage(message)) {
+          quitFromSignal("dev-runner", runEffect);
+        }
+      });
+    }
 
     if (environment.platform !== "win32") {
       yield* addScopedListener(process, "SIGINT", () => {

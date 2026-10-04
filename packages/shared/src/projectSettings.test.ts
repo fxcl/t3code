@@ -76,9 +76,9 @@ describe("resolveProjectSettings", () => {
   });
 
   it("keeps the environment text generation model when the override's provider is disabled", () => {
-    const disabledSelection = createModelSelection(ProviderInstanceId.make("claudeAgent"), "opus");
+    const disabledSelection = createModelSelection(ProviderInstanceId.make("pi"), "opus");
     const settings = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
-      providers: { claudeAgent: { enabled: false } },
+      providers: { pi: { enabled: false } },
       projectSettingsOverrides: {
         [projectId]: { textGenerationModelSelection: disabledSelection },
       },
@@ -91,7 +91,7 @@ describe("resolveProjectSettings", () => {
   });
 
   it("honours the aggregate's own fields only until the server has folded them", () => {
-    const aggregateModel = createModelSelection(ProviderInstanceId.make("codex"), "gpt-5.5");
+    const aggregateModel = createModelSelection(ProviderInstanceId.make("pi"), "gpt-5.5");
     const project = {
       defaultModelSelection: aggregateModel,
       defaultThreadEnvMode: "local" as const,
@@ -126,9 +126,9 @@ describe("resolveProjectSettings", () => {
   });
 
   it("keeps the environment default model when the override's provider is disabled", () => {
-    const disabledSelection = createModelSelection(ProviderInstanceId.make("claudeAgent"), "opus");
+    const disabledSelection = createModelSelection(ProviderInstanceId.make("pi"), "opus");
     const settings = applyServerSettingsPatch(DEFAULT_SERVER_SETTINGS, {
-      providers: { claudeAgent: { enabled: false } },
+      providers: { pi: { enabled: false } },
       projectSettingsOverrides: { [projectId]: { defaultModelSelection: disabledSelection } },
     });
     const resolved = resolveProjectSettings(settings, projectId);

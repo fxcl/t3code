@@ -14,12 +14,16 @@ import { providerAuthReturnUrl } from "@t3tools/shared/providerAuthReturnUrl";
 import { HostProcessArguments } from "@t3tools/shared/hostProcess";
 import { clerkFrontendApiHostnameFromPublishableKey } from "@t3tools/shared/relayAuth";
 import * as ElectronApp from "../electron/ElectronApp.ts";
+import * as ElectronDialog from "../electron/ElectronDialog.ts";
 import * as ElectronProtocol from "../electron/ElectronProtocol.ts";
 import * as ElectronWindow from "../electron/ElectronWindow.ts";
-import * as DesktopUserData from "./DesktopUserData.ts";
 import * as DesktopEnvironment from "./DesktopEnvironment.ts";
+import { makeComponentLogger } from "./DesktopObservability.ts";
+import * as DesktopUserData from "./DesktopUserData.ts";
 
 declare const __T3CODE_BUILD_CLERK_PUBLISHABLE_KEY__: string | undefined;
+
+const { logWarning: logDesktopClerkWarning } = makeComponentLogger("desktop-clerk");
 
 export class DesktopClerkBridgeInitializationError extends Schema.TaggedError<DesktopClerkBridgeInitializationError>()(
   "DesktopClerkBridgeInitializationError",
@@ -53,7 +57,10 @@ export class DesktopClerk extends Context.Service<
     readonly configure: Effect.Effect<
       void,
       never,
-      ElectronApp.ElectronApp | ElectronWindow.ElectronWindow | Scope.Scope
+      | ElectronApp.ElectronApp
+      | ElectronDialog.ElectronDialog
+      | ElectronWindow.ElectronWindow
+      | Scope.Scope
     >;
   }
 >()("@t3tools/desktop/app/DesktopClerk") {}
@@ -124,6 +131,7 @@ export const make = Effect.gen(function* () {
   return DesktopClerk.of({
     configure: Effect.gen(function* () {
       const electronApp = yield* ElectronApp.ElectronApp;
+      const electronDialog = yield* ElectronDialog.ElectronDialog;
       const electronWindow = yield* ElectronWindow.ElectronWindow;
       const context = yield* Effect.context<ElectronWindow.ElectronWindow>();
       const runPromise = Effect.runPromiseWith(context);
@@ -134,6 +142,14 @@ export const make = Effect.gen(function* () {
       // already begun quitting the app; app.quit() is asynchronous, so stop
       // bootstrap here before whenReady can fire.
       if (!bridge.isPrimaryInstance) {
+        yield* logDesktopClerkWarning("single-instance lock denied", {
+          stateDir: environment.stateDir,
+          isDevelopment: environment.isDevelopment,
+        });
+        yield* electronDialog.showErrorBox(
+          "piCode is already running",
+          "piCode is already running. Quit the other app and try again.",
+        );
         yield* electronApp.quit;
         return yield* Effect.interrupt;
       }

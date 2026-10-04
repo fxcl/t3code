@@ -734,3 +734,14 @@ export const ComputerUseAppIcon: Icon = (props) => {
     </svg>
   );
 };
+
+export const PiIcon: Icon = ({ className, ...props }) => (
+  <svg
+    {...props}
+    viewBox="0 0 32 32"
+    className={cn("fill-black dark:fill-white", className)}
+    xmlns="http://www.w3.org/2000/svg"
+  >
+    <path d="M5 8h22v4h-4v14h-4V12h-6v14H9V12H5V8Z" />
+  </svg>
+);

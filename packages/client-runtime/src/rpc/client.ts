@@ -1,7 +1,7 @@
 import { ORCHESTRATION_V2_WS_METHODS, WS_METHODS } from "@t3tools/contracts";
 import * as Cause from "effect/Cause";
 import * as Context from "effect/Context";
-import type * as Duration from "effect/Duration";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
@@ -192,9 +192,15 @@ interface SubscriptionOptions<TTag extends EnvironmentSubscriptionRpcTag> {
   readonly onExpectedFailure?: (
     cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
   ) => Effect.Effect<void, never, never>;
-  readonly retryExpectedFailureAfter?: Duration.Input;
+  /** True retries with backoff, false ends the subscription, undefined keeps it parked. */
+  readonly shouldRetryExpectedFailure?: (
+    cause: Cause.Cause<EnvironmentRpcStreamFailure<TTag>>,
+  ) => boolean;
   readonly resubscribe?: Stream.Stream<unknown, never, never>;
 }
+
+const expectedFailureRetryDelay = (attempt: number) =>
+  Duration.millis(Math.min(250 * 2 ** attempt, 30_000));
 
 function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
   tag: TTag,
@@ -223,7 +229,9 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                 Stream.mapEffect(() => SubscriptionRef.get(supervisor.session)),
               ),
             );
+      let subscriptionTerminated = false;
       return sessions.pipe(
+        Stream.filter(() => !subscriptionTerminated),
         Stream.switchMap(
           Option.match({
             onNone: () => Stream.empty,
@@ -238,6 +246,7 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                 EnvironmentRpcStreamValue<TTag>,
                 EnvironmentRpcStreamFailure<TTag>
               >;
+              let retryAttempt = 0;
               const subscribeToSession = (): Stream.Stream<A, EnvironmentRpcStreamFailure<TTag>> =>
                 Stream.suspend(() =>
                   Stream.unwrap(
@@ -256,7 +265,15 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         tag === WS_METHODS.previewAutomationConnect
                           ? stream.pipe(Stream.repeat(Schedule.spaced("1 second")))
                           : stream
-                      ).pipe(Stream.ensuring(completeObservation));
+                      ).pipe(
+                        // A delivered value proves the session is healthy again,
+                        // so the next expected failure restarts the backoff ladder.
+                        Stream.map((value) => {
+                          retryAttempt = 0;
+                          return value;
+                        }),
+                        Stream.ensuring(completeObservation),
+                      );
                     }),
                   ).pipe(
                     Stream.tapCause((cause) =>
@@ -296,14 +313,18 @@ function subscribeDynamicMapped<TTag extends EnvironmentSubscriptionRpcTag, A>(
                         const handled = Stream.fromEffect(options.onExpectedFailure(cause)).pipe(
                           Stream.drain,
                         );
-                        if (options.retryExpectedFailureAfter === undefined) {
+                        const shouldRetry = options.shouldRetryExpectedFailure?.(cause);
+                        if (shouldRetry !== true) {
+                          if (shouldRetry === false) {
+                            subscriptionTerminated = true;
+                          }
                           return handled;
                         }
+                        const retryDelay = expectedFailureRetryDelay(retryAttempt);
+                        retryAttempt += 1;
                         return handled.pipe(
                           Stream.concat(
-                            Stream.fromEffect(Effect.sleep(options.retryExpectedFailureAfter)).pipe(
-                              Stream.drain,
-                            ),
+                            Stream.fromEffect(Effect.sleep(retryDelay)).pipe(Stream.drain),
                           ),
                           Stream.concat(subscribeToSession()),
                         );

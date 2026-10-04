@@ -40,9 +40,10 @@ export const resolveUserDataPath = Effect.fn("desktop.userData.resolveUserDataPa
   }) {
     const fs = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
+    // Never adopt the upstream T3 Code profile: the fork owns "picode" only.
     const names = input.isDevelopment
-      ? { current: "t3code-dev", legacy: "T3 Code (Dev)" }
-      : { current: "t3code-v2", legacy: "T3 Code (Alpha)" };
+      ? { current: "picode-dev", legacy: "picode-dev" }
+      : { current: "picode", legacy: "picode" };
     const destinationPath = path.join(input.appDataDirectory, names.current);
     const legacyPath = path.join(input.appDataDirectory, names.legacy);
     const inspect = (resourcePath: string) =>
@@ -61,9 +62,7 @@ export const resolveUserDataPath = Effect.fn("desktop.userData.resolveUserDataPa
     const destinationState = path.join(destinationPath, "Local State");
     if (yield* inspect(destinationState)) return destinationPath;
     const legacyState = path.join(legacyPath, "Local State");
-    const sourceState = (yield* inspect(legacyState))
-      ? legacyState
-      : path.join(input.appDataDirectory, "t3code", "Local State");
+    const sourceState = legacyState;
     if (!(yield* inspect(sourceState))) return destinationPath;
     // Windows safeStorage keys live here. Copy only these preferences, never locked databases.
     const state = yield* fs

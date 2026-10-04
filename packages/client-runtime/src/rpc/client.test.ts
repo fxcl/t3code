@@ -12,6 +12,7 @@ import {
 import { describe, expect, it } from "@effect/vitest";
 import * as Cause from "effect/Cause";
 import * as Deferred from "effect/Deferred";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Exit from "effect/Exit";
 import * as Fiber from "effect/Fiber";
@@ -566,16 +567,16 @@ describe("environment RPC", () => {
     }),
   );
 
-  it.effect("retries handled domain failures within the same session when configured", () =>
+  it.effect("backs off repeated handled domain failures within the same session", () =>
     Effect.gen(function* () {
       const domainError = new Error("thread not found yet");
       const subscriptionCount = yield* Ref.make(0);
       const expectedFailureCount = yield* Ref.make(0);
       const client = {
         [WS_METHODS.subscribeTerminalEvents]: () =>
-          Stream.unwrap(
-            Ref.getAndUpdate(subscriptionCount, (count) => count + 1).pipe(
-              Effect.map((count) => (count === 0 ? Stream.fail(domainError) : Stream.never)),
+          Stream.fromEffect(
+            Ref.update(subscriptionCount, (count) => count + 1).pipe(
+              Effect.andThen(Effect.fail(domainError)),
             ),
           ),
       } as unknown as WsRpcProtocolClient;
@@ -587,7 +588,59 @@ describe("environment RPC", () => {
         {},
         {
           onExpectedFailure: () => Ref.update(expectedFailureCount, (count) => count + 1),
-          retryExpectedFailureAfter: "100 millis",
+          shouldRetryExpectedFailure: () => true,
+        },
+      ).pipe(
+        Stream.runDrain,
+        Effect.provideService(EnvironmentSupervisor.EnvironmentSupervisor, supervisor),
+        Effect.forkChild,
+      );
+      const awaitSubscriptions = Effect.fn("TestEnvironmentRpc.awaitSubscriptions")(function* (
+        count: number,
+      ) {
+        for (let attempt = 0; attempt < 100; attempt += 1) {
+          if ((yield* Ref.get(subscriptionCount)) >= count) return;
+          yield* Effect.yieldNow;
+        }
+        return yield* Effect.die(new Error(`Expected ${count} subscriptions.`));
+      });
+      yield* awaitSubscriptions(1);
+
+      const retryDelays = [250, 500, 1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000];
+      for (const [index, delay] of retryDelays.entries()) {
+        yield* TestClock.adjust(Duration.millis(delay - 1));
+        expect(yield* Ref.get(subscriptionCount)).toBe(index + 1);
+        yield* TestClock.adjust("1 millis");
+        yield* awaitSubscriptions(index + 2);
+      }
+      yield* Fiber.interrupt(subscriptionFiber);
+
+      expect(yield* Ref.get(subscriptionCount)).toBe(10);
+      expect(yield* Ref.get(expectedFailureCount)).toBe(10);
+    }),
+  );
+
+  it.effect("stops retrying a handled terminal domain failure", () =>
+    Effect.gen(function* () {
+      const domainError = new Error("thread was deleted");
+      const subscriptionCount = yield* Ref.make(0);
+      const client = {
+        [WS_METHODS.subscribeTerminalEvents]: () =>
+          Stream.fromEffect(
+            Ref.update(subscriptionCount, (count) => count + 1).pipe(
+              Effect.andThen(Effect.fail(domainError)),
+            ),
+          ),
+      } as unknown as WsRpcProtocolClient;
+      const { activeSession, supervisor } = yield* makeHarness();
+
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+      const subscriptionFiber = yield* subscribe(
+        WS_METHODS.subscribeTerminalEvents,
+        {},
+        {
+          onExpectedFailure: () => Effect.void,
+          shouldRetryExpectedFailure: () => false,
         },
       ).pipe(
         Stream.runDrain,
@@ -595,26 +648,14 @@ describe("environment RPC", () => {
         Effect.forkChild,
       );
       for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(expectedFailureCount)) >= 1) {
-          break;
-        }
+        if ((yield* Ref.get(subscriptionCount)) >= 1) break;
         yield* Effect.yieldNow;
       }
+      yield* TestClock.adjust("1 minute");
+      yield* SubscriptionRef.set(activeSession, Option.some(session(client)));
+      yield* Effect.yieldNow;
 
       expect(yield* Ref.get(subscriptionCount)).toBe(1);
-      expect(yield* Ref.get(expectedFailureCount)).toBe(1);
-
-      yield* TestClock.adjust("100 millis");
-      for (let attempt = 0; attempt < 100; attempt += 1) {
-        if ((yield* Ref.get(subscriptionCount)) >= 2) {
-          break;
-        }
-        yield* Effect.yieldNow;
-      }
-      yield* Fiber.interrupt(subscriptionFiber);
-
-      expect(yield* Ref.get(subscriptionCount)).toBe(2);
-      expect(yield* Ref.get(expectedFailureCount)).toBe(1);
     }),
   );
 
@@ -651,7 +692,7 @@ describe("environment RPC", () => {
               Effect.sync(() => {
                 expectedFailureCount += 1;
               }),
-            retryExpectedFailureAfter: "250 millis",
+            shouldRetryExpectedFailure: () => true,
           },
         ).pipe(
           Stream.runDrain,
@@ -706,7 +747,7 @@ describe("environment RPC", () => {
             Effect.sync(() => {
               observations.push("expected failure");
             }).pipe(Effect.andThen(Deferred.succeed(expectedFailure, undefined)), Effect.asVoid),
-          retryExpectedFailureAfter: "250 millis",
+          shouldRetryExpectedFailure: () => true,
         },
       ).pipe(
         Stream.runDrain,

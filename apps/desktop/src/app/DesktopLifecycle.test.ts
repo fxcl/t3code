@@ -32,7 +32,7 @@ function makeElectronAppLayer(
 
   return Layer.succeed(ElectronApp.ElectronApp, {
     metadata: Effect.die("unexpected metadata read"),
-    name: Effect.succeed("T3 Code"),
+    name: Effect.succeed("piCode"),
     systemLocale: Effect.succeed("en-US"),
     whenReady: Effect.void,
     quit,
@@ -101,6 +101,16 @@ function makeDesktopWindowLayer(
 }
 
 describe("DesktopLifecycle", () => {
+  it("recognizes only the dev-runner shutdown IPC message", () => {
+    assert.isTrue(
+      DesktopLifecycle.isDesktopDevShutdownMessage({
+        type: DesktopLifecycle.DESKTOP_DEV_SHUTDOWN_MESSAGE,
+      }),
+    );
+    assert.isFalse(DesktopLifecycle.isDesktopDevShutdownMessage({ type: "other" }));
+    assert.isFalse(DesktopLifecycle.isDesktopDevShutdownMessage(null));
+  });
+
   it.effect.each(["darwin", "win32", "linux"] satisfies ReadonlyArray<NodeJS.Platform>)(
     "lets the updater's quit event proceed on %s",
     (platform) => {

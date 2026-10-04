@@ -21,6 +21,7 @@ vi.mock("electron", () => ({
 
 import * as DesktopBackendManager from "../../backend/DesktopBackendManager.ts";
 import * as DesktopBackendPool from "../../backend/DesktopBackendPool.ts";
+import * as ElectronApp from "../../electron/ElectronApp.ts";
 import * as ElectronDialog from "../../electron/ElectronDialog.ts";
 import * as ElectronWindow from "../../electron/ElectronWindow.ts";
 import * as DesktopAppSettings from "../../settings/DesktopAppSettings.ts";
@@ -30,6 +31,7 @@ import {
   pasteAsText,
   pickProjectFavicon,
   probeRemoteEditors,
+  quitApp,
 } from "./window.ts";
 
 const readyWslConfig: DesktopBackendManager.DesktopBackendStartConfig = {
@@ -164,6 +166,22 @@ describe("getWindowFullscreenState", () => {
         }),
       ),
     );
+  });
+});
+
+describe("quitApp", () => {
+  it.effect("requests the Electron application quit", () => {
+    let quitRequested = false;
+    const electronApp = ElectronApp.ElectronApp.of({
+      quit: Effect.sync(() => {
+        quitRequested = true;
+      }),
+    } as ElectronApp.ElectronApp["Service"]);
+
+    return Effect.gen(function* () {
+      yield* quitApp.handler(undefined);
+      assert.isTrue(quitRequested);
+    }).pipe(Effect.provide(Layer.succeed(ElectronApp.ElectronApp, electronApp)));
   });
 });
 

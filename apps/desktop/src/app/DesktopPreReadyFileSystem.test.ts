@@ -17,18 +17,23 @@ const resolveWindowsUserData = (appDataDirectory: string) =>
   }).pipe(Effect.provide(DesktopPreReadyFileSystem.layer));
 
 it.layer(NodeServices.layer)("DesktopPreReadyFileSystem", (it) => {
-  it.effect("migrates the legacy Windows profile state", () =>
+  it.effect("uses the existing Windows profile without migrating browser databases", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
       const path = yield* Path.Path;
-      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-pre-ready-fs-" });
-      yield* fileSystem.makeDirectory(path.join(root, "T3 Code (Alpha)"));
-      yield* fileSystem.writeFileString(path.join(root, "T3 Code (Alpha)", "Local State"), "keys");
+      const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "picode-pre-ready-fs-" });
+      yield* fileSystem.makeDirectory(path.join(root, "picode", "IndexedDB"), { recursive: true });
+      yield* fileSystem.writeFileString(path.join(root, "picode", "Local State"), "keys");
+      yield* fileSystem.writeFileString(
+        path.join(root, "picode", "IndexedDB", "LOCK"),
+        "Chromium owns this database",
+      );
 
       const userData = yield* resolveWindowsUserData(root);
 
-      assert.equal(userData, path.join(root, "t3code-v2"));
+      assert.equal(userData, path.join(root, "picode"));
       assert.equal(yield* fileSystem.readFileString(path.join(userData, "Local State")), "keys");
+      assert.isTrue(yield* fileSystem.exists(path.join(userData, "IndexedDB", "LOCK")));
     }),
   );
 
@@ -37,7 +42,7 @@ it.layer(NodeServices.layer)("DesktopPreReadyFileSystem", (it) => {
     () =>
       Effect.gen(function* () {
         const fileSystem = yield* FileSystem.FileSystem;
-        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "t3-pre-ready-fs-" });
+        const root = yield* fileSystem.makeTempDirectoryScoped({ prefix: "picode-pre-ready-fs-" });
         yield* fileSystem.chmod(root, 0o000);
         yield* Effect.addFinalizer(() => fileSystem.chmod(root, 0o700).pipe(Effect.orDie));
 

@@ -1207,6 +1207,12 @@ export interface DesktopBridge {
    * web callers fall back to a plain file input.
    */
   pickThemeFiles?: () => Promise<readonly PickedThemeFile[] | null>;
+  /**
+   * Quit the desktop app cleanly (used by the native command export flow).
+   * Optional: older desktop builds lack it, and callers fall back to
+   * interrupting the running session.
+   */
+  quitApp?: () => Promise<void>;
   setTheme: (theme: DesktopTheme) => Promise<void>;
   showContextMenu: <T extends string>(
     items: readonly ContextMenuItem<T>[],

@@ -21,7 +21,7 @@ vi.mock("electron", async (importOriginal) => ({
   ...(await importOriginal<typeof import("electron")>()),
   session: {
     fromPartition: vi.fn(() => ({
-      getUserAgent: vi.fn(() => "Mozilla/5.0 Electron/41.5.0 t3code/1.2.3"),
+      getUserAgent: vi.fn(() => "Mozilla/5.0 Electron/41.5.0 piCode/1.2.3"),
       setPermissionRequestHandler: vi.fn(),
       setUserAgent: vi.fn(),
     })),
@@ -76,7 +76,7 @@ function makeFakeBrowserWindow() {
     copyImageAt: vi.fn(),
     focus: vi.fn(),
     isDestroyed: vi.fn(() => false),
-    getURL: vi.fn(() => "t3code-dev://app/"),
+    getURL: vi.fn(() => "picode-dev://app/"),
     getZoomLevel: vi.fn(() => zoomLevel),
     getZoomFactor: vi.fn(() => 1.2 ** zoomLevel),
     setZoomLevel: vi.fn((level: number) => {
@@ -221,6 +221,7 @@ function makeTestLayer(input: {
   readonly beforeMainWindowBoundsUpdate?: (
     bounds: DesktopAppSettings.DesktopWindowBounds,
   ) => Effect.Effect<void>;
+  readonly beforeCreate?: Effect.Effect<void>;
   readonly openedExternalUrls?: unknown[];
   readonly copiedTexts?: string[];
   readonly onPopupTemplate?: (input: ElectronMenu.ElectronMenuTemplateInput) => Effect.Effect<void>;
@@ -264,9 +265,12 @@ function makeTestLayer(input: {
 
   const electronWindowLayer = Layer.succeed(ElectronWindow.ElectronWindow, {
     create: (options) =>
-      Effect.sync(() => {
-        input.createdWindowOptions?.push(options);
-      }).pipe(
+      (input.beforeCreate ?? Effect.void).pipe(
+        Effect.andThen(
+          Effect.sync(() => {
+            input.createdWindowOptions?.push(options);
+          }),
+        ),
         Effect.andThen(Ref.update(input.createCount, (count) => count + 1)),
         Effect.as(input.window),
       ),
@@ -584,19 +588,19 @@ describe("DesktopWindow", () => {
   it("recognizes only same-origin renderer navigations", () => {
     assert.isTrue(
       DesktopWindow.isSameOriginRendererNavigation({
-        applicationUrl: "t3code://app/",
-        navigationUrl: "t3code://app/settings/connections",
+        applicationUrl: "picode://app/",
+        navigationUrl: "picode://app/settings/connections",
       }),
     );
     assert.isFalse(
       DesktopWindow.isSameOriginRendererNavigation({
-        applicationUrl: "t3code://app/",
+        applicationUrl: "picode://app/",
         navigationUrl: "https://accounts.microsoft.com/oauth",
       }),
     );
     assert.isFalse(
       DesktopWindow.isSameOriginRendererNavigation({
-        applicationUrl: "t3code://app/",
+        applicationUrl: "picode://app/",
         navigationUrl: "not a url",
       }),
     );
@@ -629,7 +633,7 @@ describe("DesktopWindow", () => {
         assert.isTrue(createdWindowOptions[0]?.disableAutoHideCursor);
         assert.isFalse(createdWindowOptions[0]?.webPreferences?.backgroundThrottling);
         assert.deepEqual(fakeWindow.setAutoHideCursor.mock.calls, [[false]]);
-        assert.deepEqual(fakeWindow.loadURL.mock.calls[0], ["t3code-dev://app/"]);
+        assert.deepEqual(fakeWindow.loadURL.mock.calls[0], ["picode-dev://app/"]);
         assert.equal(fakeWindow.openDevTools.mock.calls.length, 1);
       }).pipe(Effect.provide(layer));
     }),
@@ -801,6 +805,40 @@ describe("DesktopWindow", () => {
         fakeWindow.windowListeners.get("leave-full-screen")?.();
         assert.deepEqual(fakeWindow.setWindowButtonPosition.mock.lastCall, [{ x: 16, y: 19 }]);
       }).pipe(Effect.provide(layer));
+    }),
+  );
+
+  it.effect("serializes concurrent main window creation", () =>
+    Effect.gen(function* () {
+      const fakeWindow = makeFakeBrowserWindow();
+      const createCount = yield* Ref.make(0);
+      const mainWindow = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
+      const createStarted = yield* Deferred.make<void>();
+      const releaseCreate = yield* Deferred.make<void>();
+      const layer = makeTestLayer({
+        window: fakeWindow.window,
+        createCount,
+        mainWindow,
+        beforeCreate: Deferred.succeed(createStarted, undefined).pipe(
+          Effect.andThen(Deferred.await(releaseCreate)),
+        ),
+      });
+
+      yield* Effect.gen(function* () {
+        const desktopWindow = yield* DesktopWindow.DesktopWindow;
+        const first = yield* desktopWindow.createMain.pipe(Effect.forkChild);
+        yield* Deferred.await(createStarted);
+        const second = yield* desktopWindow.createMain.pipe(Effect.forkChild);
+        yield* Deferred.succeed(releaseCreate, undefined);
+        const [firstWindow, secondWindow] = yield* Effect.all([
+          Fiber.join(first),
+          Fiber.join(second),
+        ]);
+
+        assert.strictEqual(firstWindow, fakeWindow.window);
+        assert.strictEqual(secondWindow, fakeWindow.window);
+        assert.equal(yield* Ref.get(createCount), 1);
+      }).pipe(Effect.provide(layer), Effect.scoped);
     }),
   );
 
@@ -1306,17 +1344,17 @@ describe("DesktopWindow", () => {
           return yield* Effect.die("renderer load listeners were not registered");
         }
 
-        didFailLoad({}, -9, "ERR_UNEXPECTED", "t3code-dev://app/", true);
+        didFailLoad({}, -9, "ERR_UNEXPECTED", "picode-dev://app/", true);
         assert.equal(fakeWindow.loadURL.mock.calls.length, 1);
 
         yield* TestClock.adjust(100);
         assert.deepEqual(fakeWindow.loadURL.mock.calls, [
-          ["t3code-dev://app/"],
-          ["t3code-dev://app/"],
+          ["picode-dev://app/"],
+          ["picode-dev://app/"],
         ]);
         assert.equal(fakeWindow.reload.mock.calls.length, 0);
 
-        didFailLoad({}, -9, "ERR_UNEXPECTED", "t3code-dev://app/", true);
+        didFailLoad({}, -9, "ERR_UNEXPECTED", "picode-dev://app/", true);
         didFinishLoad();
         yield* TestClock.adjust(250);
         assert.equal(fakeWindow.loadURL.mock.calls.length, 2);
@@ -1328,23 +1366,23 @@ describe("DesktopWindow", () => {
   it("retries only transient failures for the development renderer", () => {
     assert.isTrue(
       DesktopWindow.isRetryableDevelopmentRendererLoadFailure({
-        applicationUrl: "t3code-dev://app/",
+        applicationUrl: "picode-dev://app/",
         errorCode: -102,
         isMainFrame: true,
-        validatedUrl: "t3code-dev://app/",
+        validatedUrl: "picode-dev://app/",
       }),
     );
     assert.isFalse(
       DesktopWindow.isRetryableDevelopmentRendererLoadFailure({
-        applicationUrl: "t3code-dev://app/",
+        applicationUrl: "picode-dev://app/",
         errorCode: -3,
         isMainFrame: true,
-        validatedUrl: "t3code-dev://app/",
+        validatedUrl: "picode-dev://app/",
       }),
     );
     assert.isFalse(
       DesktopWindow.isRetryableDevelopmentRendererLoadFailure({
-        applicationUrl: "t3code-dev://app/",
+        applicationUrl: "picode-dev://app/",
         errorCode: -102,
         isMainFrame: true,
         validatedUrl: "https://example.com/",
@@ -1509,7 +1547,7 @@ describe("DesktopWindow", () => {
         createCount,
         mainWindow,
         onReveal: () => {
-          foreground = "T3 Code";
+          foreground = "piCode";
           operations.push("reveal");
         },
       });
@@ -1518,7 +1556,7 @@ describe("DesktopWindow", () => {
         const desktopWindow = yield* DesktopWindow.DesktopWindow;
         yield* desktopWindow.handleBackendReady(new URL("http://127.0.0.1:3773"));
         yield* desktopWindow.dispatchSnapShotEvent({ type: "started", id: captureOne });
-        assert.equal(foreground, "T3 Code");
+        assert.equal(foreground, "piCode");
         foreground = "Explorer";
         yield* desktopWindow.dispatchSnapShotEvent({ type: "ready", id: captureOne });
         yield* desktopWindow.dispatchSnapShotEvent({ type: "failed", id: captureTwo });

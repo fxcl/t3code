@@ -5,6 +5,7 @@ import * as Fiber from "effect/Fiber";
 import * as Layer from "effect/Layer";
 import * as Option from "effect/Option";
 import * as Ref from "effect/Ref";
+import * as Semaphore from "effect/Semaphore";
 
 import * as Electron from "electron";
 
@@ -328,6 +329,9 @@ export const make = Effect.gen(function* () {
   // createMainIfBackendReady, which gates the post-readiness window
   // open in development and the macOS "activate without windows" path.
   const backendReadyRef = yield* Ref.make(false);
+  // Serializes main-window creation so concurrent ensureMain/activate callers
+  // cannot race two BrowserWindow creations past the "existing window" check.
+  const mainWindowMutex = yield* Semaphore.make(1);
   // The transient "Connecting to WSL" splash window, tracked separately so it
   // is never mistaken for the real main window.
   const splashWindowRef = yield* Ref.make<Option.Option<Electron.BrowserWindow>>(Option.none());
@@ -745,6 +749,8 @@ export const make = Effect.gen(function* () {
       clearDevelopmentLoadRetry();
       developmentLoadRetryIndex = 0;
       window.setTitle(environment.displayName);
+      // Positive readiness signal consumed by scripts/smoke-test.mjs.
+      void runPromise(logWindowInfo("main window ready"));
       if (environment.platform === "darwin") syncMacosWindowButtons(window);
     });
     window.webContents.on(
@@ -844,19 +850,20 @@ export const make = Effect.gen(function* () {
   });
 
   const createMain = Effect.gen(function* () {
-    const window = yield* createWindow();
-    yield* electronWindow.setMain(window);
-    yield* logWindowInfo("main window created");
-    return window;
-  }).pipe(Effect.withSpan("desktop.window.createMain"));
-
-  const ensureMain = Effect.gen(function* () {
     const existingWindow = yield* currentMainWindow;
     if (Option.isSome(existingWindow)) {
       return existingWindow.value;
     }
-    return yield* createMain;
-  }).pipe(Effect.withSpan("desktop.window.ensureMain"));
+    const window = yield* createWindow();
+    yield* electronWindow.setMain(window);
+    yield* logWindowInfo("main window created");
+    return window;
+  }).pipe(
+    mainWindowMutex.withPermits(1),
+    Effect.withSpan("desktop.window.createMain"),
+  );
+
+  const ensureMain = createMain.pipe(Effect.withSpan("desktop.window.ensureMain"));
 
   const revealOrCreateMain = Effect.gen(function* () {
     const window = yield* ensureMain;
