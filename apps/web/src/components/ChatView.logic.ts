@@ -572,14 +572,22 @@ export function resolveComposerProviderSelection(input: {
   const requestedInstanceId = input.candidateInstanceIds.find(
     (candidate) => candidate != null && candidate !== NO_PROVIDER_MODEL_SELECTION.instanceId,
   );
+  // A draft whose provider is still unresolved carries the `no provider`
+  // sentinel rather than a real instance. Treating it as a locked instance
+  // would suppress the fallback below and leave the composer without a
+  // picker even when a healthy instance is configured.
+  const lockedInstanceId =
+    input.lockedInstanceId === NO_PROVIDER_MODEL_SELECTION.instanceId
+      ? null
+      : input.lockedInstanceId;
   const requestedDriverKind =
     input.lockedProvider ??
     input.entries.find((entry) => entry.instanceId === requestedInstanceId)?.driverKind ??
     input.entries[0]?.driverKind ??
     ProviderDriverKind.make("unconfigured");
   const lockedContinuationGroupKey = input.lockedProvider
-    ? (input.entries.find((entry) => entry.instanceId === input.lockedInstanceId)
-        ?.continuationGroupKey ?? null)
+    ? (input.entries.find((entry) => entry.instanceId === lockedInstanceId)?.continuationGroupKey ??
+      null)
     : null;
   const compatibleEntries = input.entries.filter(
     (entry) =>
@@ -587,25 +595,25 @@ export function resolveComposerProviderSelection(input: {
       (!lockedContinuationGroupKey || entry.continuationGroupKey === lockedContinuationGroupKey),
   );
   const selectedProviderEntry =
-    (input.lockedInstanceId ? [input.lockedInstanceId] : input.candidateInstanceIds)
+    (lockedInstanceId ? [lockedInstanceId] : input.candidateInstanceIds)
       .map((candidate) =>
         compatibleEntries.find(
           (entry) => entry.instanceId === candidate && entry.enabled && entry.isAvailable,
         ),
       )
       .find((entry) => entry !== undefined) ??
-    (input.lockedInstanceId
+    (lockedInstanceId
       ? // A locked instance must exist and be usable: never silently continue
         // an existing thread on a different instance of the same driver.
         undefined
-      : resolveSelectableProviderInstanceEntry(
+      : (resolveSelectableProviderInstanceEntry(
           compatibleEntries.filter((entry) => entry.driverKind === requestedDriverKind),
           undefined,
-        ) ?? resolveSelectableProviderInstanceEntry(compatibleEntries, undefined));
+        ) ?? resolveSelectableProviderInstanceEntry(compatibleEntries, undefined)));
   const unavailableProviderInstanceId = selectedProviderEntry
     ? undefined
     : input.lockedProvider
-      ? (input.lockedInstanceId ?? requestedInstanceId)
+      ? (lockedInstanceId ?? requestedInstanceId)
       : requestedInstanceId;
   return {
     selectedProviderEntry,

@@ -1513,6 +1513,19 @@ describe("resolveComposerProviderSelection", () => {
     expect(selection.unavailableProviderInstanceId).toBeUndefined();
   });
 
+  it("selects the configured instance for a draft that still carries the placeholder lock", () => {
+    const piEntry = entry("pi");
+    const selection = resolveComposerProviderSelection({
+      entries: [piEntry],
+      candidateInstanceIds: [piEntry.instanceId, NO_PROVIDER_MODEL_SELECTION.instanceId],
+      lockedProvider: null,
+      lockedInstanceId: NO_PROVIDER_MODEL_SELECTION.instanceId,
+    });
+
+    expect(selection.selectedProviderEntry?.instanceId).toBe(piEntry.instanceId);
+    expect(selection.unavailableProviderInstanceId).toBeUndefined();
+  });
+
   it("keeps the session's continuation group when another instance was selected", () => {
     const sessionEntry = entry("pi", "pi_work", {
       enabled: false,
