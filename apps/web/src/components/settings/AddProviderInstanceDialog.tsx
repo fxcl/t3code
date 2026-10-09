@@ -31,10 +31,7 @@ import { SettingsGroup } from "./SettingsGroup";
 import { SettingsRow } from "./settingsLayout";
 import { ProviderSettingsForm, deriveProviderSettingsFields } from "./ProviderSettingsForm";
 import { WizardPanel, WizardPopup, WizardHeader, WizardFooter } from "../ui/wizard";
-import {
-  resolveWizardNavigation,
-  type WizardNavigation,
-} from "./AddProviderInstanceDialog.logic";
+import { resolveWizardNavigation, type WizardNavigation } from "./AddProviderInstanceDialog.logic";
 import { AddProviderInstanceWizardSteps } from "./AddProviderInstanceWizardSteps";
 
 /**
@@ -262,10 +259,7 @@ export function AddProviderInstanceDialog({
             </RadioGroup>
           </div>
 
-          <SettingsGroup
-            variant="plain"
-            className={cn(wizardStep !== identityStep && "hidden")}
-          >
+          <SettingsGroup variant="plain" className={cn(wizardStep !== identityStep && "hidden")}>
             <SettingsRow
               title={<label htmlFor="add-provider-label">Label</label>}
               description={
@@ -286,9 +280,7 @@ export function AddProviderInstanceDialog({
             <SettingsRow
               title={<label htmlFor="add-provider-instance-id">Instance ID</label>}
               description={
-                <span id="add-provider-instance-id-description">
-                  Letters, digits, '-', or '_'.
-                </span>
+                <span id="add-provider-instance-id-description">Letters, digits, '-', or '_'.</span>
               }
               status={
                 showInstanceIdError ? (

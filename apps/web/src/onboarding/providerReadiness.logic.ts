@@ -112,9 +112,7 @@ export function resolveOnboardingProviderLoginCommand(
   const instance = settings.providerInstances[provider.instanceId];
 
   if (provider.driver === "pi") {
-    const config = decodePiSettings(
-      instance ? (instance.config ?? {}) : settings.providers.pi,
-    );
+    const config = decodePiSettings(instance ? (instance.config ?? {}) : settings.providers.pi);
     const binaryPath = Option.isSome(config) ? config.value.binaryPath : "pi";
     return quoteProviderBinary(binaryPath, "pi", platform);
   }

@@ -111,7 +111,7 @@ describe("instance-scoped model selection", () => {
       provider({ provider: ProviderDriverKind.make("pi"), instanceId: "claudeAgent" }),
       provider({
         provider: ProviderDriverKind.make("pi"),
-        instanceId: "pi_openrouter"
+        instanceId: "pi_openrouter",
       }),
     ];
 
@@ -170,9 +170,7 @@ describe("instance-scoped model selection", () => {
         },
       },
     };
-    const pi = deriveProviderInstanceEntries(providers).find(
-      (entry) => entry.instanceId === "pi",
-    )!;
+    const pi = deriveProviderInstanceEntries(providers).find((entry) => entry.instanceId === "pi")!;
 
     expect(getAppModelOptionsForInstance(settings, pi).map((option) => option.slug)).toContain(
       "pi-test-custom-model",
@@ -606,7 +604,7 @@ describe("instance-scoped model selection", () => {
     };
 
     expect(resolveAppModelSelectionState(settings, providers).instanceId).toBe(
-      ProviderInstanceId.make("pi")
+      ProviderInstanceId.make("pi"),
     );
   });
   it("does not select a provider that cannot generate system text", () => {

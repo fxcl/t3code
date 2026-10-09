@@ -103,9 +103,9 @@ describe("packaged-pi-only", () => {
   });
 
   it("extracts package names from node_modules paths", () => {
-    expect(packageNamesFromNodeModulesPath("node_modules/node-pty/build/Release/pty.node")).toEqual([
-      "node-pty",
-    ]);
+    expect(packageNamesFromNodeModulesPath("node_modules/node-pty/build/Release/pty.node")).toEqual(
+      ["node-pty"],
+    );
     expect(packageNamesFromNodeModulesPath("node_modules/@cursor/sdk/dist/index.js")).toEqual([
       "@cursor/sdk",
     ]);
@@ -119,15 +119,18 @@ describe("packaged-pi-only", () => {
 
   it("finds removed provider packages in an asar header", () => {
     const header = dirRecord({
-      "apps": dirRecord({
-        "server": dirRecord({
-          "dist": dirRecord({ "bin.mjs": fileRecord() }),
+      apps: dirRecord({
+        server: dirRecord({
+          dist: dirRecord({ "bin.mjs": fileRecord() }),
         }),
       }),
-      "node_modules": dirRecord({
-        "effect": dirRecord({ "index.js": fileRecord() }),
+      node_modules: dirRecord({
+        effect: dirRecord({ "index.js": fileRecord() }),
         "@cursor": dirRecord({
-          "sdk": dirRecord({ "package.json": fileRecord(), "dist": dirRecord({ "main.js": fileRecord() }) }),
+          sdk: dirRecord({
+            "package.json": fileRecord(),
+            dist: dirRecord({ "main.js": fileRecord() }),
+          }),
         }),
       }),
     });
@@ -137,21 +140,21 @@ describe("packaged-pi-only", () => {
 
   it("passes a Pi-only asar header, including nested installs", () => {
     const cleanHeader = dirRecord({
-      "node_modules": dirRecord({
+      node_modules: dirRecord({
         "node-pty": dirRecord({
-          "build": dirRecord({ "Release": dirRecord({ "pty.node": fileRecord() }) }),
+          build: dirRecord({ Release: dirRecord({ "pty.node": fileRecord() }) }),
         }),
       }),
     });
     expect(findRemovedProviderAsarEntries(asHeader(cleanHeader))).toEqual([]);
 
     const nestedHeader = dirRecord({
-      "node_modules": dirRecord({
+      node_modules: dirRecord({
         "@scope": dirRecord({
-          "pkg": dirRecord({
-            "node_modules": dirRecord({
+          pkg: dirRecord({
+            node_modules: dirRecord({
               "@opencode": dirRecord({
-                "client": dirRecord({ "index.js": fileRecord() }),
+                client: dirRecord({ "index.js": fileRecord() }),
               }),
             }),
           }),
@@ -166,7 +169,9 @@ describe("packaged-pi-only", () => {
     const serverDependencies = serverManifest.dependencies as Record<string, string>;
     expect(findRemovedProviderPackages(Object.keys(serverDependencies))).toEqual([]);
     expect(
-      findRemovedProviderPackages(Object.keys(selectCliRuntimeExternalDependencies(serverDependencies))),
+      findRemovedProviderPackages(
+        Object.keys(selectCliRuntimeExternalDependencies(serverDependencies)),
+      ),
     ).toEqual([]);
 
     const desktopManifest = await readJsonManifest("apps/desktop/package.json");

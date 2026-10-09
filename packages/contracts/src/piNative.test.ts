@@ -107,8 +107,6 @@ describe("Pi-native contracts", () => {
     const getTree = WsRpcGroup.requests.get(PI_NATIVE_WS_METHODS.getTree);
     if (getTree === undefined) throw new Error("piNative.getTree is not registered");
     const decode = Schema.decodeUnknownExit(getTree.payloadSchema);
-    expect(Exit.isSuccess(decode({ threadId: "11111111-1111-4111-8111-111111111111" }))).toBe(
-      true,
-    );
+    expect(Exit.isSuccess(decode({ threadId: "11111111-1111-4111-8111-111111111111" }))).toBe(true);
   });
 });

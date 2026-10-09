@@ -54,9 +54,7 @@ const model = (slug: string, isCustom = false, isDefault = false) => ({
 
 describe("isProviderInstancePickerReady", () => {
   it("rejects a disabled instance even while its last probe status is ready", () => {
-    const [entry] = deriveProviderInstanceEntries([
-      provider({ instanceId: "pi", enabled: false }),
-    ]);
+    const [entry] = deriveProviderInstanceEntries([provider({ instanceId: "pi", enabled: false })]);
 
     expect(entry?.status).toBe("ready");
     expect(entry && isProviderInstancePickerReady(entry)).toBe(false);
@@ -136,9 +134,7 @@ describe("applyProviderInstanceSettings", () => {
   });
 
   it("treats a removed custom instance snapshot as disabled", () => {
-    const entries = deriveProviderInstanceEntries([
-      provider({ instanceId: "pi_work" }),
-    ]);
+    const entries = deriveProviderInstanceEntries([provider({ instanceId: "pi_work" })]);
     const [entry] = applyProviderInstanceSettings(entries, {
       providerInstances: {},
       providers: {} as never,
@@ -259,10 +255,7 @@ describe("deriveProviderEntriesByEnvironment", () => {
 describe("resolveSelectableProviderInstance", () => {
   it("returns the requested instance when it is enabled and available", () => {
     const requested = ProviderInstanceId.make("pi_work");
-    const providers = [
-      provider({ instanceId: "pi" }),
-      provider({ instanceId: requested }),
-    ];
+    const providers = [provider({ instanceId: "pi" }), provider({ instanceId: requested })];
 
     expect(resolveSelectableProviderInstance(providers, requested)).toBe(requested);
   });
@@ -457,10 +450,7 @@ describe("resolveDefaultProviderModelSelection", () => {
   it("returns no selection for empty, disabled, unavailable, or error-only profiles", () => {
     expect(resolveDefaultProviderModelSelection([], null)).toBeNull();
     expect(
-      resolveDefaultProviderModelSelection(
-        [provider({ instanceId: "pi", enabled: false })],
-        null,
-      ),
+      resolveDefaultProviderModelSelection([provider({ instanceId: "pi", enabled: false })], null),
     ).toBeNull();
     expect(
       resolveDefaultProviderModelSelection(
@@ -469,10 +459,7 @@ describe("resolveDefaultProviderModelSelection", () => {
       ),
     ).toBeNull();
     expect(
-      resolveDefaultProviderModelSelection(
-        [provider({ instanceId: "pi", status: "error" })],
-        null,
-      ),
+      resolveDefaultProviderModelSelection([provider({ instanceId: "pi", status: "error" })], null),
     ).toBeNull();
   });
 });

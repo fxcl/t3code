@@ -858,10 +858,7 @@ export const make = Effect.gen(function* () {
     yield* electronWindow.setMain(window);
     yield* logWindowInfo("main window created");
     return window;
-  }).pipe(
-    mainWindowMutex.withPermits(1),
-    Effect.withSpan("desktop.window.createMain"),
-  );
+  }).pipe(mainWindowMutex.withPermits(1), Effect.withSpan("desktop.window.createMain"));
 
   const ensureMain = createMain.pipe(Effect.withSpan("desktop.window.ensureMain"));
 

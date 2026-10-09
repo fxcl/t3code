@@ -10,10 +10,7 @@ import {
 } from "./composer-editor-mentions";
 
 import { resolveShortcutCommand, type ShortcutEventLike } from "./keybindings";
-import {
-  parseNativeSlashCommand,
-  type NativeSlashCommand,
-} from "./nativeSlashCommands";
+import { parseNativeSlashCommand, type NativeSlashCommand } from "./nativeSlashCommands";
 
 export type ComposerTriggerKind = "path" | "pull-request" | "slash-command" | "skill";
 export type ComposerSlashCommand = NativeSlashCommand;

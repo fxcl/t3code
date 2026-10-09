@@ -8,11 +8,11 @@ Projects can override the environment default. New threads use this setting rath
 mode of the thread you were viewing. The initial default is **Full access**; existing threads
 and modes you choose in a draft keep their permissions.
 
-| Mode                  | Behavior                                                                              |
-| --------------------- | ------------------------------------------------------------------------------------- |
-| **Supervised**        | Requests approval for commands and file changes.                                      |
-| **Auto-accept edits** | Approves file edits automatically; other actions can still require approval.          |
-| **Full access**       | Allows commands and edits without approval prompts.                                   |
+| Mode                  | Behavior                                                                     |
+| --------------------- | ---------------------------------------------------------------------------- |
+| **Supervised**        | Requests approval for commands and file changes.                             |
+| **Auto-accept edits** | Approves file edits automatically; other actions can still require approval. |
+| **Full access**       | Allows commands and edits without approval prompts.                          |
 
 Pi does not expose an AI approval reviewer, so the **Auto** option is not offered.
 Threads that already stored Auto run and display as **Supervised**.

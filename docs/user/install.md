@@ -96,9 +96,9 @@ Open **Settings → Providers** in the web or desktop app, select the environmen
 and enable Pi. Installation, login, and configuration belong to that
 environment's machine, even when you connect from another computer.
 
-| Provider | Install and authenticate                                                                     |
-| -------- | -------------------------------------------------------------------------------------------- |
-| Pi       | Install [Pi](https://pi.dev), then run `pi` once to finish its login or API-key setup.        |
+| Provider | Install and authenticate                                                               |
+| -------- | -------------------------------------------------------------------------------------- |
+| Pi       | Install [Pi](https://pi.dev), then run `pi` once to finish its login or API-key setup. |
 
 The `pi` binary must be on the server's `PATH`. If T3 Code cannot find it, set
 Pi's **Binary path** in provider settings, especially when using a version

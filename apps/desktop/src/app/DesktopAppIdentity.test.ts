@@ -131,9 +131,7 @@ const withIdentity = <A, E, R>(
             exists: (path) =>
               input.legacyPathProbeError
                 ? Effect.fail(input.legacyPathProbeError)
-                : Effect.succeed(
-                    input.legacyPathExists === true && /picode(-dev)?$/.test(path),
-                  ),
+                : Effect.succeed(input.legacyPathExists === true && /picode(-dev)?$/.test(path)),
             readFileString: () =>
               Effect.succeed(input.packageJson ?? '{"t3codeCommitHash":"abcdef1234567890"}'),
           }),

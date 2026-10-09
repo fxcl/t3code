@@ -145,34 +145,36 @@ export const buildRuntimeLayerWithFatalStartupReport = <ROut, E, RIn, R2>(
     reportFatal(cause).pipe(Effect.andThen(Effect.failCause(cause))),
   );
 
-export const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupError")(function* (
-  stage: string,
-  error: unknown,
-): Effect.fn.Return<
-  void,
-  never,
-  | DesktopShutdown.DesktopShutdown
-  | DesktopState.DesktopState
-  | ElectronApp.ElectronApp
-  | ElectronDialog.ElectronDialog
-> {
-  const shutdown = yield* DesktopShutdown.DesktopShutdown;
-  const state = yield* DesktopState.DesktopState;
-  const electronApp = yield* ElectronApp.ElectronApp;
-  const electronDialog = yield* ElectronDialog.ElectronDialog;
-  const report = describeFatalStartupError(stage, error);
-  yield* logStartupError("fatal startup error", {
-    stage,
-    message: report.message,
-    ...(report.detail.length > 0 ? { detail: report.detail } : {}),
-  });
-  const wasQuitting = yield* Ref.getAndSet(state.quitting, true);
-  if (!wasQuitting) {
-    yield* electronDialog.showErrorBox(report.title, report.content);
-  }
-  yield* shutdown.request;
-  yield* electronApp.quit;
-});
+export const handleFatalStartupError = Effect.fn("desktop.startup.handleFatalStartupError")(
+  function* (
+    stage: string,
+    error: unknown,
+  ): Effect.fn.Return<
+    void,
+    never,
+    | DesktopShutdown.DesktopShutdown
+    | DesktopState.DesktopState
+    | ElectronApp.ElectronApp
+    | ElectronDialog.ElectronDialog
+  > {
+    const shutdown = yield* DesktopShutdown.DesktopShutdown;
+    const state = yield* DesktopState.DesktopState;
+    const electronApp = yield* ElectronApp.ElectronApp;
+    const electronDialog = yield* ElectronDialog.ElectronDialog;
+    const report = describeFatalStartupError(stage, error);
+    yield* logStartupError("fatal startup error", {
+      stage,
+      message: report.message,
+      ...(report.detail.length > 0 ? { detail: report.detail } : {}),
+    });
+    const wasQuitting = yield* Ref.getAndSet(state.quitting, true);
+    if (!wasQuitting) {
+      yield* electronDialog.showErrorBox(report.title, report.content);
+    }
+    yield* shutdown.request;
+    yield* electronApp.quit;
+  },
+);
 
 export const stopAllPoolInstances = Effect.fn("desktop.app.stopAllPoolInstances")(
   function* (): Effect.fn.Return<void, never, DesktopBackendPool.DesktopBackendPool> {

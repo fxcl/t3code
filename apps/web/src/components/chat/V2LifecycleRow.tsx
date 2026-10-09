@@ -193,7 +193,9 @@ export function V2LifecycleRow(props: {
     return (
       <WorkLogRow
         data-v2-item-type={item.type}
-        icon={<PiIcon className="size-4 fill-current text-icon-muted dark:fill-current" aria-hidden />}
+        icon={
+          <PiIcon className="size-4 fill-current text-icon-muted dark:fill-current" aria-hidden />
+        }
         label={<>Created thread{item.title ? ` · ${item.title}` : ""}</>}
         trailing={
           <InlineButton
