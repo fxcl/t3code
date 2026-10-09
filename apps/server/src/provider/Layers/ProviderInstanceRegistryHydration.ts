@@ -61,10 +61,7 @@ import {
   ProviderOrchestrationAdapterInfrastructureLive,
 } from "./ProviderOrchestrationAdapterInfrastructure.ts";
 type ProviderInstanceRegistryHydrationEnv =
-  | Exclude<
-      BuiltInDriversEnv,
-      ProviderOrchestrationAdapterInfrastructure
-    >
+  | Exclude<BuiltInDriversEnv, ProviderOrchestrationAdapterInfrastructure>
   | Settings.ServerSettingsService;
 
 /**

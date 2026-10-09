@@ -281,8 +281,9 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     Effect.gen(function* () {
       const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
       const instanceId = ProviderInstanceId.make("acpRegistry_shared");
-      const results = yield* Effect.all(
-        ["First", "Second"].map((displayName) =>
+      const results = yield* Effect.forEach(
+        ["First", "Second"],
+        (displayName) =>
           serverSettings
             .updateProviderInstance({
               operation: "create",
@@ -294,7 +295,6 @@ it.layer(NodeServices.layer)("server settings", (it) => {
               },
             })
             .pipe(Effect.result),
-        ),
         { concurrency: "unbounded" },
       );
 
@@ -779,33 +779,35 @@ it.layer(NodeServices.layer)("server settings", (it) => {
     }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
-  it.effect("defaults unknown-driver instances to enabled after a new installation writes settings", () =>
-    Effect.gen(function* () {
-      const serverConfig = yield* ServerConfig.ServerConfig;
-      const fileSystem = yield* FileSystem.FileSystem;
-      const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
+  it.effect(
+    "defaults unknown-driver instances to enabled after a new installation writes settings",
+    () =>
+      Effect.gen(function* () {
+        const serverConfig = yield* ServerConfig.ServerConfig;
+        const fileSystem = yield* FileSystem.FileSystem;
+        const serverSettings = yield* ServerSettingsModule.ServerSettingsService;
 
-      const next = yield* serverSettings.updateSettings({
-        addProjectBaseDirectory: "~/Development",
-        providerInstances: {
-          [ProviderInstanceId.make("grok")]: {
-            driver: ProviderDriverKind.make("grok"),
-            config: {},
+        const next = yield* serverSettings.updateSettings({
+          addProjectBaseDirectory: "~/Development",
+          providerInstances: {
+            [ProviderInstanceId.make("grok")]: {
+              driver: ProviderDriverKind.make("grok"),
+              config: {},
+            },
           },
-        },
-      });
+        });
 
-      const grok = next.providerInstances[ProviderInstanceId.make("grok")];
-      assert.isDefined(grok);
-      // Drivers removed from the providers record (forks, older builds)
-      // default to enabled so a downgrade round-trip doesn't strand them.
-      assert.isTrue(resolveProviderInstanceEnabled(grok));
+        const grok = next.providerInstances[ProviderInstanceId.make("grok")];
+        assert.isDefined(grok);
+        // Drivers removed from the providers record (forks, older builds)
+        // default to enabled so a downgrade round-trip doesn't strand them.
+        assert.isTrue(resolveProviderInstanceEnabled(grok));
 
-      const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
-      // @effect-diagnostics-next-line preferSchemaOverJson:off
-      const persisted = JSON.parse(raw);
-      assert.isUndefined(persisted.providerInstances.grok.enabled);
-    }).pipe(Effect.provide(makeServerSettingsLayer())),
+        const raw = yield* fileSystem.readFileString(serverConfig.settingsPath);
+        // @effect-diagnostics-next-line preferSchemaOverJson:off
+        const persisted = JSON.parse(raw);
+        assert.isUndefined(persisted.providerInstances.grok.enabled);
+      }).pipe(Effect.provide(makeServerSettingsLayer())),
   );
 
   it.effect("folds a legacy in-config enabled flag into the envelope on load", () =>

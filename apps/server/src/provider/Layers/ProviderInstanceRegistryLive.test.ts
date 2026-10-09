@@ -92,9 +92,7 @@ const baseLayer = ServerConfig.layerTest(process.cwd(), {
   Layer.provideMerge(Layer.mock(ServerSecretStore.ServerSecretStore)({})),
   Layer.provideMerge(
     Layer.succeed(ServerEnvironment.ServerEnvironmentIdentity, {
-      getEnvironmentId: Effect.succeed(
-        EnvironmentId.make("00000000-0000-4000-8000-000000000001"),
-      ),
+      getEnvironmentId: Effect.succeed(EnvironmentId.make("00000000-0000-4000-8000-000000000001")),
     }),
   ),
   Layer.provideMerge(BackgroundPolicyAlwaysRunLayer),

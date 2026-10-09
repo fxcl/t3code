@@ -270,7 +270,7 @@ it.effect(
           closeInstance: () => Effect.void,
           release: () => Effect.void,
           detach: () => Effect.void,
-          openForThreadPiNative: () => Effect.succeed(Option.none()),
+          openForThreadPiNative: () => Effect.succeedNone,
         }),
       );
       const controlLayer = ProviderTurnControlService.layer.pipe(

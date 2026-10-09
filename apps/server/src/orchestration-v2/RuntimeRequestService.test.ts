@@ -10,7 +10,6 @@ import {
 import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 
 import type { ProviderAdapterV2RuntimeRequestResponseInput } from "./ProviderAdapter.ts";
 import * as ProjectionStore from "./ProjectionStore.ts";
@@ -72,11 +71,9 @@ it.effect("forwards orchestrator-resolved runtime requests to the live adapter",
     (_input: ProviderAdapterV2RuntimeRequestResponseInput) => Effect.void,
   );
   const getSession = vi.fn(() =>
-    Effect.succeed(
-      Option.some({
-        respondToRuntimeRequest,
-      } as never),
-    ),
+    Effect.succeedSome({
+      respondToRuntimeRequest,
+    } as never),
   );
   const projection = {
     runtimeRequests: [
@@ -136,11 +133,9 @@ it.effect("rejects expired runtime requests before invoking the live adapter", (
     (_input: ProviderAdapterV2RuntimeRequestResponseInput) => Effect.void,
   );
   const getSession = vi.fn(() =>
-    Effect.succeed(
-      Option.some({
-        respondToRuntimeRequest,
-      } as never),
-    ),
+    Effect.succeedSome({
+      respondToRuntimeRequest,
+    } as never),
   );
   const projection = {
     runtimeRequests: [
@@ -203,7 +198,7 @@ it.effect("classifies runtime request response validation failures", () => {
     "provider-session-runtime-request-validation-other",
   );
   const requestId = RuntimeRequestId.make("request-validation");
-  const unexpectedGetSession = vi.fn(() => Effect.succeed(Option.none()));
+  const unexpectedGetSession = vi.fn(() => Effect.succeedNone);
   const missingLayer = runtimeRequestTestLayer(
     projectionWithRuntimeRequest(),
     unexpectedGetSession,
@@ -214,7 +209,7 @@ it.effect("classifies runtime request response validation failures", () => {
   );
   const inactiveLayer = runtimeRequestTestLayer(
     projectionWithRuntimeRequest(resolvedRuntimeRequest(requestId, providerSessionId)),
-    () => Effect.succeed(Option.none()),
+    () => Effect.succeedNone,
   );
   const respond = Effect.gen(function* () {
     const service = yield* RuntimeRequestService.RuntimeRequestServiceV2;

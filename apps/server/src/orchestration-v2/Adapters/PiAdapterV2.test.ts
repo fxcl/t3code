@@ -1525,8 +1525,7 @@ describe("PiAdapterV2", () => {
       });
       const cancelled = yield* takeEvent(
         (event) =>
-          event.type === "runtime_request.updated" &&
-          event.runtimeRequest.status === "cancelled",
+          event.type === "runtime_request.updated" && event.runtimeRequest.status === "cancelled",
       );
       assert.isTrue(
         cancelled.type === "runtime_request.updated" &&

@@ -6,7 +6,11 @@ import type {
 } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
-import type { PiActiveTranscript, PiTranscriptActivity, PiTranscriptMessage } from "./piTranscript.ts";
+import type {
+  PiActiveTranscript,
+  PiTranscriptActivity,
+  PiTranscriptMessage,
+} from "./piTranscript.ts";
 
 // Transcript replacement command and entry shapes mirror the piCode fork's
 // orchestration contracts (`thread.transcript.replace`). t3code's command
@@ -149,16 +153,16 @@ export function navigatePiTreeAndReplaceTranscript<NE, NR, RE, RR, DE, DR, ME, M
   } & TranscriptReplacementDependencies<DE, DR, ME, MR>,
 ): Effect.Effect<PiNativeNavigateTreeResult, NE | RE | DE | ME, NR | RR | DR | MR> {
   return dependencies.navigate(input).pipe(
-    Effect.flatMap((result) => {
-      if (result.cancelled || result.aborted || dependencies.currentLeafId === input.targetId) {
-        return Effect.succeed(result);
-      }
-      return dependencies.readTranscript().pipe(
-        Effect.flatMap((transcript) =>
-          replacePiTranscript(input.threadId, transcript, true, dependencies),
+    Effect.filterOrElse(
+      (result) =>
+        result.cancelled || result.aborted || dependencies.currentLeafId === input.targetId,
+      (result) =>
+        dependencies.readTranscript().pipe(
+          Effect.flatMap((transcript) =>
+            replacePiTranscript(input.threadId, transcript, true, dependencies),
+          ),
+          Effect.as(result),
         ),
-        Effect.as(result),
-      );
-    }),
+    ),
   );
 }

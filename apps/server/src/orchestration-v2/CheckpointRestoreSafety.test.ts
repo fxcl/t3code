@@ -13,7 +13,6 @@ import {
 import * as Effect from "effect/Effect";
 import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
-import * as Option from "effect/Option";
 import * as Path from "effect/Path";
 import { symlinksSupported } from "@t3tools/shared/testing/symlinks";
 import {
@@ -107,7 +106,7 @@ it.effect.each([
           NodeServices.layer,
           idAllocatorLayer,
           Layer.mock(ProjectStore.ProjectStoreV2)({
-            get: () => Effect.succeed(Option.some({ workspaceRoot: parent } as never)),
+            get: () => Effect.succeedSome({ workspaceRoot: parent } as never),
           }),
           Layer.mock(ProjectionStoreV2)({
             getThreadRecords: () => Effect.succeed(projection),

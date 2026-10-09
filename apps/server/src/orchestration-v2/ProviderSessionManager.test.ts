@@ -390,31 +390,27 @@ function makeTestLayer(input: {
   const providerEventIngestorTestLayer = input.failFirstRuntimeRequestIngest
     ? Layer.effect(
         ProviderEventIngestor.ProviderEventIngestorV2,
-        Effect.map(
-          ProviderEventIngestor.ProviderEventIngestorV2,
-          (ingestor) =>
-            ProviderEventIngestor.ProviderEventIngestorV2.of({
-              normalize: (args) => ingestor.normalize(args),
-              ingestNormalized: (args) => {
-                input.ingestCalls?.push(args.event);
-                return input.ingestCalls !== undefined && input.ingestCalls.length === 1
-                  ? Effect.fail(
-                      new ProviderEventIngestor.ProviderEventNormalizeError({
-                        providerSessionId: args.providerSessionId,
-                        threadId: args.threadId,
-                        providerEvent: args.event,
-                        cause: "forced first-ingest failure",
-                      }),
-                    )
-                  : ingestor.ingestNormalized(args);
-              },
-            }),
+        Effect.map(ProviderEventIngestor.ProviderEventIngestorV2, (ingestor) =>
+          ProviderEventIngestor.ProviderEventIngestorV2.of({
+            normalize: (args) => ingestor.normalize(args),
+            ingestNormalized: (args) => {
+              input.ingestCalls?.push(args.event);
+              return input.ingestCalls !== undefined && input.ingestCalls.length === 1
+                ? Effect.fail(
+                    new ProviderEventIngestor.ProviderEventNormalizeError({
+                      providerSessionId: args.providerSessionId,
+                      threadId: args.threadId,
+                      providerEvent: args.event,
+                      cause: "forced first-ingest failure",
+                    }),
+                  )
+                : ingestor.ingestNormalized(args);
+            },
+          }),
         ),
       ).pipe(
         Layer.provide(ProviderEventIngestor.layer),
-        Layer.provide(
-          Layer.mergeAll(configuredEventSinkLayer, IdAllocator.layer, TestStoresLayer),
-        ),
+        Layer.provide(Layer.mergeAll(configuredEventSinkLayer, IdAllocator.layer, TestStoresLayer)),
       )
     : ProviderEventIngestor.layer.pipe(
         Layer.provide(Layer.mergeAll(configuredEventSinkLayer, IdAllocator.layer, TestStoresLayer)),
@@ -2415,7 +2411,10 @@ it.effect("ProviderSessionManagerV2 keeps pumping after a runtime request persis
       // and release the session for the wrong reason.
       // Later events are still delivered to subscribers...
       const delivered = Array.from(yield* Fiber.join(collected));
-      assert.deepEqual(delivered.map((event) => event.type), ["turn.terminal"]);
+      assert.deepEqual(
+        delivered.map((event) => event.type),
+        ["turn.terminal"],
+      );
       // ...and the surviving runtime-request events are still persisted:
       // two from the first group (the poisoned head was dropped) and all
       // three from the second.
@@ -2432,7 +2431,8 @@ it.effect("ProviderSessionManagerV2 keeps pumping after a runtime request persis
       // The poisoned ingest was logged exactly once and did not release
       // the session.
       const failures = (yield* TestConsole.logLines).filter(
-        (line): line is string => typeof line === "string" && line.includes("event-processing-failed"),
+        (line): line is string =>
+          typeof line === "string" && line.includes("event-processing-failed"),
       );
       assert.equal(failures.length, 1);
       assert.isTrue(Option.isSome(yield* manager.get(providerSessionId)));
@@ -2440,14 +2440,16 @@ it.effect("ProviderSessionManagerV2 keeps pumping after a runtime request persis
 
     yield* effect.pipe(
       Effect.provide(
-        makeTestLayer({
-          state,
-          idleTimeoutMs: 60_000,
-          failFirstRuntimeRequestIngest: true,
-          ingestCalls,
-        }),
+        Layer.merge(
+          makeTestLayer({
+            state,
+            idleTimeoutMs: 60_000,
+            failFirstRuntimeRequestIngest: true,
+            ingestCalls,
+          }),
+          TestConsole.layer,
+        ),
       ),
-      Effect.provide(TestConsole.layer),
     );
   }),
 );

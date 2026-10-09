@@ -80,10 +80,7 @@ import { ChildProcess, ChildProcessSpawner } from "effect/unstable/process";
 import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
-import {
-  resolveAttachmentPath,
-  toSafeThreadAttachmentSegment,
-} from "../../attachmentStore.ts";
+import { resolveAttachmentPath, toSafeThreadAttachmentSegment } from "../../attachmentStore.ts";
 import { normalizePiActiveTranscript } from "../../provider/piTranscript.ts";
 import type { PiNativeAdapterShape } from "../../provider/Services/PiNativeAdapter.ts";
 import { collectUint8StreamText } from "../../stream/collectUint8StreamText.ts";
@@ -2382,9 +2379,7 @@ export function makePiAdapterV2(
       const piNativeError = (operation: string, cause: unknown) =>
         new ProviderAdapter.ProviderAdapterProtocolError({
           driver: PI_PROVIDER,
-          detail: `${operation} failed: ${
-            cause instanceof Error ? cause.message : String(cause)
-          }`,
+          detail: `${operation} failed: ${cause instanceof Error ? cause.message : String(cause)}`,
         });
 
       const decodePiSessionState = (timeoutMs?: number) =>
@@ -2434,9 +2429,7 @@ export function makePiAdapterV2(
             yield* options.fileSystem
               .makeDirectory(options.serverConfig.attachmentsDir, { recursive: true })
               .pipe(
-                Effect.mapError((cause) =>
-                  piNativeError("materialize_transcript_images", cause),
-                ),
+                Effect.mapError((cause) => piNativeError("materialize_transcript_images", cause)),
               );
             yield* Effect.forEach(
               transcript.images ?? [],
@@ -2447,16 +2440,15 @@ export function makePiAdapterV2(
                 });
                 return attachmentPath === null
                   ? Effect.fail(
-                      piNativeError(
-                        "materialize_transcript_images",
-                        "Invalid attachment path",
-                      ),
+                      piNativeError("materialize_transcript_images", "Invalid attachment path"),
                     )
-                  : options.fileSystem.writeFile(attachmentPath, bytes).pipe(
-                      Effect.mapError((cause) =>
-                        piNativeError("materialize_transcript_images", cause),
-                      ),
-                    );
+                  : options.fileSystem
+                      .writeFile(attachmentPath, bytes)
+                      .pipe(
+                        Effect.mapError((cause) =>
+                          piNativeError("materialize_transcript_images", cause),
+                        ),
+                      );
               },
               { concurrency: 1, discard: true },
             );
@@ -2521,9 +2513,7 @@ export function makePiAdapterV2(
               );
             }
             if (state.isCompacting) {
-              return yield* protocolError(
-                "Wait for compaction to finish before reloading.",
-              );
+              return yield* protocolError("Wait for compaction to finish before reloading.");
             }
             yield* request({ type: "reload" }).pipe(
               Effect.mapError((cause) => piNativeError("reload", cause)),
@@ -2550,11 +2540,9 @@ export function makePiAdapterV2(
         () =>
           Effect.gen(function* () {
             const state = yield* decodePiSessionState();
-            const stats = yield* requestDecoded(
-              PiNativeSessionStats,
-              "get_session_stats",
-              { type: "get_session_stats" },
-            );
+            const stats = yield* requestDecoded(PiNativeSessionStats, "get_session_stats", {
+              type: "get_session_stats",
+            });
             return { state, stats };
           });
 
@@ -2570,20 +2558,16 @@ export function makePiAdapterV2(
 
       const getPiLastAssistantText: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getLastAssistantText"] =
         () =>
-          requestDecoded(
-            PiNativeLastAssistantText,
-            "get_last_assistant_text",
-            { type: "get_last_assistant_text" },
-          );
+          requestDecoded(PiNativeLastAssistantText, "get_last_assistant_text", {
+            type: "get_last_assistant_text",
+          });
 
       const exportPiSessionHtml: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["exportSessionHtml"] =
         (input) =>
           Effect.gen(function* () {
             const threadSegment = toSafeThreadAttachmentSegment(input.threadId);
             if (threadSegment === null) {
-              return yield* protocolError(
-                "Cannot export a Pi session with an invalid thread id.",
-              );
+              return yield* protocolError("Cannot export a Pi session with an invalid thread id.");
             }
             const exportDir = yield* options.fileSystem
               .makeTempDirectory({ prefix: "d4-export-" })
@@ -2607,10 +2591,7 @@ export function makePiAdapterV2(
                 catch: (cause) =>
                   piNativeError(
                     "export_html",
-                    new Error(
-                      "Pi did not create the requested export file.",
-                      { cause },
-                    ),
+                    new Error("Pi did not create the requested export file.", { cause }),
                   ),
               });
               if (!outputInfo.isFile() || outputInfo.isSymbolicLink() || outputInfo.size === 0) {
@@ -2619,10 +2600,7 @@ export function makePiAdapterV2(
               const canonicalOutputPath = yield* options.fileSystem
                 .realPath(outputPath)
                 .pipe(Effect.mapError((cause) => piNativeError("export_html", cause)));
-              const relativeOutputPath = NodePath.relative(
-                canonicalExportDir,
-                canonicalOutputPath,
-              );
+              const relativeOutputPath = NodePath.relative(canonicalExportDir, canonicalOutputPath);
               if (
                 relativeOutputPath === "" ||
                 relativeOutputPath === ".." ||
@@ -2641,7 +2619,7 @@ export function makePiAdapterV2(
               Effect.tapError(() =>
                 options.fileSystem
                   .remove(exportDir, { recursive: true, force: true })
-                  .pipe(Effect.catch(() => Effect.void)),
+                  .pipe(Effect.ignore),
               ),
             );
           });
@@ -2650,16 +2628,11 @@ export function makePiAdapterV2(
         operation: string,
         command: PiRpcRecord,
         timeoutMs?: number,
-      ): Effect.Effect<
-        PiNativeSessionMutationResult,
-        ProviderAdapter.ProviderAdapterV2Error
-      > =>
+      ): Effect.Effect<PiNativeSessionMutationResult, ProviderAdapter.ProviderAdapterV2Error> =>
         Effect.gen(function* () {
           const state = yield* decodePiSessionState(2_000);
           if (state.isStreaming || state.isCompacting) {
-            return yield* protocolError(
-              "Wait for the current response or compaction to finish.",
-            );
+            return yield* protocolError("Wait for the current response or compaction to finish.");
           }
           const data = yield* request(command, timeoutMs).pipe(
             Effect.mapError((cause) => piNativeError(operation, cause)),
@@ -2676,10 +2649,7 @@ export function makePiAdapterV2(
           );
           const nativeId = recordString(stateData, "sessionFile");
           if (nativeId === undefined) {
-            return yield* protocolError(
-              "get_state returned no persisted sessionFile",
-              stateData,
-            );
+            return yield* protocolError("get_state returned no persisted sessionFile", stateData);
           }
           lastNativeThreadId = nativeId;
           appliedModel = null;
@@ -2705,35 +2675,33 @@ export function makePiAdapterV2(
 
       const getPiSettings: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getSettings"] =
         (input) =>
-          requestDecoded(
-            PiNativeSettingsResult,
-            "get_safe_settings",
-            { type: "get_safe_settings", scope: input.scope },
-          );
+          requestDecoded(PiNativeSettingsResult, "get_safe_settings", {
+            type: "get_safe_settings",
+            scope: input.scope,
+          });
 
       const updatePiSettings: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["updateSettings"] =
         (input) =>
-          requestDecoded(
-            PiNativeSettingsResult,
-            "set_safe_settings",
-            { type: "set_safe_settings", scope: input.scope, values: input.values },
-          );
+          requestDecoded(PiNativeSettingsResult, "set_safe_settings", {
+            type: "set_safe_settings",
+            scope: input.scope,
+            values: input.values,
+          });
 
       const getPiScopedModels: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getScopedModels"] =
         (input) =>
-          requestDecoded(
-            PiNativeScopedModelsResult,
-            "get_scoped_models",
-            { type: "get_scoped_models", scope: input.scope },
-          );
+          requestDecoded(PiNativeScopedModelsResult, "get_scoped_models", {
+            type: "get_scoped_models",
+            scope: input.scope,
+          });
 
       const updatePiScopedModels: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["updateScopedModels"] =
         (input) =>
-          requestDecoded(
-            PiNativeScopedModelsResult,
-            "set_scoped_models",
-            { type: "set_scoped_models", scope: input.scope, patterns: input.patterns },
-          );
+          requestDecoded(PiNativeScopedModelsResult, "set_scoped_models", {
+            type: "set_scoped_models",
+            scope: input.scope,
+            patterns: input.patterns,
+          });
 
       const listPiResumeSessions: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["listResumeSessions"] =
         () =>
@@ -2773,9 +2741,7 @@ export function makePiAdapterV2(
             const bytes = Buffer.byteLength(input.content, "utf8");
             const lines = input.content.split("\n").length;
             if (bytes > PI_NATIVE_IMPORT_MAX_BYTES || lines > PI_NATIVE_IMPORT_MAX_LINES) {
-              return yield* protocolError(
-                "Imported session exceeds the byte or line limit.",
-              );
+              return yield* protocolError("Imported session exceeds the byte or line limit.");
             }
             const entries = input.content
               .split("\n")
@@ -2803,83 +2769,58 @@ export function makePiAdapterV2(
 
       const getPiTrust: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getTrust"] =
         () =>
-          requestDecoded(
-            PiNativeTrustResult,
-            "get_project_trust",
-            { type: "get_project_trust" },
-          );
+          requestDecoded(PiNativeTrustResult, "get_project_trust", { type: "get_project_trust" });
 
-      const setPiTrust: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["setTrust"] =
-        (input) =>
-          Effect.gen(function* () {
-            if (input.trusted && input.confirmed !== true) {
-              return yield* protocolError(
-                "Trusting a project requires explicit confirmation.",
-              );
-            }
-            return yield* requestDecoded(
-              PiNativeTrustResult,
-              "set_project_trust",
-              {
-                type: "set_project_trust",
-                trusted: input.trusted,
-                confirmed: input.confirmed,
-              },
-            );
+      const setPiTrust: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["setTrust"] = (
+        input,
+      ) =>
+        Effect.gen(function* () {
+          if (input.trusted && input.confirmed !== true) {
+            return yield* protocolError("Trusting a project requires explicit confirmation.");
+          }
+          return yield* requestDecoded(PiNativeTrustResult, "set_project_trust", {
+            type: "set_project_trust",
+            trusted: input.trusted,
+            confirmed: input.confirmed,
           });
+        });
 
       const getPiChangelog: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getChangelog"] =
-        () =>
-          requestDecoded(
-            PiNativeChangelogResult,
-            "get_changelog",
-            { type: "get_changelog" },
-          );
+        () => requestDecoded(PiNativeChangelogResult, "get_changelog", { type: "get_changelog" });
 
       const getPiAuthState: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getAuthState"] =
-        () =>
-          requestDecoded(PiNativeAuthState, "get_auth_state", { type: "get_auth_state" });
+        () => requestDecoded(PiNativeAuthState, "get_auth_state", { type: "get_auth_state" });
 
       const beginPiAuthLogin: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["beginAuthLogin"] =
         (input) =>
-          requestDecoded(
-            PiNativeAuthFlow,
-            "begin_auth_login",
-            {
-              type: "begin_auth_login",
-              providerId: input.providerId,
-              authType: input.authType,
-            },
-          );
+          requestDecoded(PiNativeAuthFlow, "begin_auth_login", {
+            type: "begin_auth_login",
+            providerId: input.providerId,
+            authType: input.authType,
+          });
 
       const getPiAuthFlow: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["getAuthFlow"] =
         (input) =>
-          requestDecoded(
-            PiNativeAuthFlow,
-            "get_auth_flow",
-            { type: "get_auth_flow", flowId: input.flowId },
-          );
+          requestDecoded(PiNativeAuthFlow, "get_auth_flow", {
+            type: "get_auth_flow",
+            flowId: input.flowId,
+          });
 
       const respondPiAuthFlow: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["respondAuthFlow"] =
         (input) =>
-          requestDecoded(
-            PiNativeAuthFlow,
-            "respond_auth_flow",
-            {
-              type: "respond_auth_flow",
-              flowId: input.flowId,
-              promptId: input.promptId,
-              response: input.response,
-            },
-          );
+          requestDecoded(PiNativeAuthFlow, "respond_auth_flow", {
+            type: "respond_auth_flow",
+            flowId: input.flowId,
+            promptId: input.promptId,
+            response: input.response,
+          });
 
       const cancelPiAuthFlow: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["cancelAuthFlow"] =
         (input) =>
-          requestDecoded(
-            PiNativeAuthFlow,
-            "cancel_auth_flow",
-            { type: "cancel_auth_flow", flowId: input.flowId },
-          );
+          requestDecoded(PiNativeAuthFlow, "cancel_auth_flow", {
+            type: "cancel_auth_flow",
+            flowId: input.flowId,
+          });
 
       const logoutPiAuth: PiNativeAdapterShape<ProviderAdapter.ProviderAdapterV2Error>["logoutAuth"] =
         (input) =>
@@ -2941,7 +2882,7 @@ export function makePiAdapterV2(
                     recursive: true,
                     force: true,
                   })
-                  .pipe(Effect.catch(() => Effect.void)),
+                  .pipe(Effect.ignore),
               ),
             );
           });

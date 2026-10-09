@@ -2,6 +2,7 @@ import { EnvironmentId } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 
+import * as McpInvocationContext from "./McpInvocationContext.ts";
 import * as McpSessionRegistry from "./McpSessionRegistry.ts";
 
 export const layer = Layer.succeed(
@@ -19,7 +20,7 @@ export const layer = Layer.succeed(
           browserToolsAvailable: true,
         },
       }),
-    resolve: () => Effect.succeed(undefined),
+    resolve: () => Effect.succeed(undefined as McpInvocationContext.McpInvocationScope | undefined),
     touch: () => Effect.void,
     revokeProviderSession: () => Effect.void,
     revokeThread: () => Effect.void,

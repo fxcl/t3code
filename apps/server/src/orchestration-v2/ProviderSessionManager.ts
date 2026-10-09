@@ -185,9 +185,7 @@ export interface ProviderSessionManagerV2Shape {
    * `None` means the thread has no provider session a native call could
    * attach to.
    */
-  readonly openForThreadPiNative: (input: {
-    readonly threadId: ThreadId;
-  }) => Effect.Effect<
+  readonly openForThreadPiNative: (input: { readonly threadId: ThreadId }) => Effect.Effect<
     Option.Option<{
       readonly runtime: ProviderAdapterV2SessionRuntime;
       readonly providerThread: OrchestrationV2ProviderThread;

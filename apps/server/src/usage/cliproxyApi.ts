@@ -199,9 +199,7 @@ function readModelScoped(
   rateLimits: ReadonlyArray<NonNullable<ClaudeUsageDecoded["limits"]>[number]>,
 ): ReadonlyArray<ClaudeModelScopedWindow> {
   return rateLimits.flatMap((limit) =>
-    limit.kind === "weekly_scoped" &&
-    limit.scope?.model &&
-    typeof limit.percent === "number"
+    limit.kind === "weekly_scoped" && limit.scope?.model && typeof limit.percent === "number"
       ? [
           {
             display_name: limit.scope.model.display_name,
@@ -222,14 +220,20 @@ function claudeUsageResponseToLimits(input: {
   const windows: ServerProviderUsageWindow[] = [];
   const fiveHour = input.fiveHour;
   if (fiveHour && typeof fiveHour.utilization === "number") {
-    windows.push(claudeWindow("five_hour", fiveHour.utilization, isoFromString(fiveHour.resets_at)));
+    windows.push(
+      claudeWindow("five_hour", fiveHour.utilization, isoFromString(fiveHour.resets_at)),
+    );
   }
   const sevenDay = input.sevenDay;
   if (sevenDay && typeof sevenDay.utilization === "number") {
-    windows.push(claudeWindow("seven_day", sevenDay.utilization, isoFromString(sevenDay.resets_at)));
+    windows.push(
+      claudeWindow("seven_day", sevenDay.utilization, isoFromString(sevenDay.resets_at)),
+    );
   }
   for (const entry of readModelScoped(input.limits ?? [])) {
-    windows.push(claudeScopedWindow(entry.display_name, entry.utilization, isoFromString(entry.resets_at)));
+    windows.push(
+      claudeScopedWindow(entry.display_name, entry.utilization, isoFromString(entry.resets_at)),
+    );
   }
   return makeUsageLimits({ checkedAt: input.checkedAt, windows });
 }

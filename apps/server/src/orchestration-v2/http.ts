@@ -33,6 +33,16 @@ import * as ProjectStore from "./ProjectStore.ts";
 import { buildActiveShellSnapshot } from "./ShellStream.ts";
 import { projectThreadProjectionForWire } from "./WireProjection.ts";
 
+class ThreadHistoryCursorDecodeError extends Error {
+  readonly _tag = "ThreadHistoryCursorDecodeError";
+  override readonly cause: unknown;
+  constructor(cause: unknown) {
+    super("thread history cursor decode failed");
+    this.cause = cause;
+    this.name = "ThreadHistoryCursorDecodeError";
+  }
+}
+
 function isThreadNotFound(error: unknown): boolean {
   return (
     Predicate.hasProperty(error, "cause") &&
@@ -220,15 +230,18 @@ export const orchestrationHttpApiLayer = HttpApiBuilder.group(
         Effect.fn("environment.orchestration.threadHistoryPage")(function* (args) {
           yield* annotateEnvironmentRequest(args.endpoint.name);
           yield* requireEnvironmentScope(AuthOrchestrationReadScope);
-          let anchorItemId;
-          try {
-            anchorItemId = TurnItemId.make(decodeThreadHistoryCursor(args.query.cursor).si);
-          } catch (cause) {
-            if (cause instanceof InvalidThreadHistoryCursorError) {
-              return yield* failEnvironmentInvalidRequest("invalid_history_cursor");
-            }
-            return yield* failEnvironmentInternal("orchestration_thread_history_failed", cause);
-          }
+          const anchorItemId = yield* Effect.try({
+            try: () => TurnItemId.make(decodeThreadHistoryCursor(args.query.cursor).si),
+            catch: (cause) => new ThreadHistoryCursorDecodeError(cause),
+          }).pipe(
+            Effect.catchIf(
+              (error) => error.cause instanceof InvalidThreadHistoryCursorError,
+              () => failEnvironmentInvalidRequest("invalid_history_cursor"),
+            ),
+            Effect.catch((error) =>
+              failEnvironmentInternal("orchestration_thread_history_failed", error.cause),
+            ),
+          );
           const decodedCursor = decodeThreadHistoryCursor(args.query.cursor);
           const snapshot = yield* loadThreadSnapshotWindow(
             args.params.threadId,

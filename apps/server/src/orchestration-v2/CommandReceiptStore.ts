@@ -173,11 +173,11 @@ const baseLayer: Layer.Layer<
         receipts.getByCommandId({ commandId }).pipe(
           Effect.flatMap(
             Option.match({
-              onNone: () => Effect.succeed(Option.none()),
+              onNone: () => Effect.succeedNone,
               onSome: (receipt) =>
                 receipt.aggregateKind !== "thread"
-                  ? Effect.succeed(Option.none())
-                  : fromApplicationReceipt(receipt).pipe(Effect.map(Option.some)),
+                  ? Effect.succeedNone
+                  : fromApplicationReceipt(receipt).pipe(Effect.asSome),
             }),
           ),
           Effect.mapError(
@@ -192,7 +192,7 @@ const baseLayer: Layer.Layer<
         receipts.getByCommandId({ commandId }).pipe(
           Effect.flatMap((receipt) =>
             Option.isNone(receipt) || receipt.value.aggregateKind !== "project"
-              ? Effect.succeed(Option.none())
+              ? Effect.succeedNone
               : decodeProjectReceipt({
                   commandId: receipt.value.commandId,
                   projectId: receipt.value.aggregateId,
@@ -201,7 +201,7 @@ const baseLayer: Layer.Layer<
                   resultSequence: receipt.value.resultSequence,
                   status: receipt.value.status,
                   error: receipt.value.error,
-                }).pipe(Effect.map(Option.some)),
+                }).pipe(Effect.asSome),
           ),
           Effect.mapError((cause) => new CommandReceiptStoreReadError({ commandId, cause })),
         ),

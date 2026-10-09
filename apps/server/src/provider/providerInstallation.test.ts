@@ -22,9 +22,7 @@ describe("provider installation (Pi-only build)", () => {
   it.effect("fails fast when cancelling a managed install", () =>
     Effect.gen(function* () {
       const router = yield* makeRouter();
-      const error = yield* Effect.flip(
-        router.cancel({ instanceId, operationId: "operation" }),
-      );
+      const error = yield* Effect.flip(router.cancel({ instanceId, operationId: "operation" }));
       assert.equal(error._tag, "ProviderSetupError");
       assert.include(error.detail, "Pi-only build");
     }),

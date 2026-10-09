@@ -1314,8 +1314,7 @@ const makeWsRpcLayer = (
                   ? Effect.fail(
                       new PiNativeError({
                         operation,
-                        message:
-                          "The thread's provider does not support Pi-native operations.",
+                        message: "The thread's provider does not support Pi-native operations.",
                       }),
                     )
                   : request(piNative).pipe(
@@ -1512,9 +1511,7 @@ const makeWsRpcLayer = (
         [PI_NATIVE_WS_METHODS.compact]: (input) =>
           observeRpcEffect(
             PI_NATIVE_WS_METHODS.compact,
-            runPiNative("compact", input.threadId, (piNative) =>
-              piNative.compactSession(input),
-            ),
+            runPiNative("compact", input.threadId, (piNative) => piNative.compactSession(input)),
             { "rpc.aggregate": "pi-native" },
           ),
         [PI_NATIVE_WS_METHODS.getStateAndStats]: ({ threadId }) =>
@@ -1557,9 +1554,7 @@ const makeWsRpcLayer = (
         [PI_NATIVE_WS_METHODS.getSettings]: (input) =>
           observeRpcEffect(
             PI_NATIVE_WS_METHODS.getSettings,
-            runPiNative("getSettings", input.threadId, (piNative) =>
-              piNative.getSettings(input),
-            ),
+            runPiNative("getSettings", input.threadId, (piNative) => piNative.getSettings(input)),
             { "rpc.aggregate": "pi-native" },
           ),
         [PI_NATIVE_WS_METHODS.updateSettings]: (input) =>
@@ -2167,29 +2162,23 @@ const makeWsRpcLayer = (
                 ) ?? projection.providerThreads.at(-1);
               const providerSessionId = providerThread?.providerSessionId ?? null;
               if (providerThread === undefined || providerSessionId === null) {
-                return yield* Effect.fail(
-                  new ProviderUploadFeedbackError({
-                    threadId: input.threadId,
-                    cause: "No provider session has run in this thread yet.",
-                  }),
-                );
+                return yield* new ProviderUploadFeedbackError({
+                  threadId: input.threadId,
+                  cause: "No provider session has run in this thread yet.",
+                });
               }
               const runtime = Option.getOrNull(yield* providerSessionsV2.get(providerSessionId));
               if (runtime === null) {
-                return yield* Effect.fail(
-                  new ProviderUploadFeedbackError({
-                    threadId: input.threadId,
-                    cause: "The provider session is no longer running. Send a message first.",
-                  }),
-                );
+                return yield* new ProviderUploadFeedbackError({
+                  threadId: input.threadId,
+                  cause: "The provider session is no longer running. Send a message first.",
+                });
               }
               if (runtime.uploadFeedback === undefined) {
-                return yield* Effect.fail(
-                  new ProviderUploadFeedbackError({
-                    threadId: input.threadId,
-                    cause: `Provider '${runtime.driver}' does not support feedback uploads.`,
-                  }),
-                );
+                return yield* new ProviderUploadFeedbackError({
+                  threadId: input.threadId,
+                  cause: `Provider '${runtime.driver}' does not support feedback uploads.`,
+                });
               }
               return yield* runtime.uploadFeedback({
                 providerThread,

@@ -333,9 +333,7 @@ describe("PiAdapterV2 live fixture turn", () => {
               event.turnItem.text === "OK",
           ),
         );
-        assert.isTrue(
-          events.some((event) => event.type === "provider_thread.updated"),
-        );
+        assert.isTrue(events.some((event) => event.type === "provider_thread.updated"));
       }).pipe(Effect.scoped, Effect.provide(testLayer)),
   );
 });
